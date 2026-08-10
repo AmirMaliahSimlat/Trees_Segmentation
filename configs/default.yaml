@@ -1,0 +1,48 @@
+model:
+  name: restor/tcd-segformer-mit-b5
+  # Use mit-b3 if GPU memory is limited
+  # name: restor/tcd-segformer-mit-b3
+  num_labels: 2
+  id2label:
+    0: background
+    1: tree
+
+predict:
+  tile_size: 1024
+  overlap: 0.25
+  batch_size: 1
+  threshold: 0.5
+  # If true, resize tiles toward ~10 cm GSD before inference (pretrained training GSD)
+  match_train_gsd: false
+  train_gsd_m: 0.10
+  native_gsd_m: 0.30
+
+annotation:
+  tile_size: 1024
+  sample_stride: 512
+  max_tiles: 40
+  uncertainty_top_k: 30
+  overlay_alpha: 0.45
+
+train:
+  image_size: 512
+  batch_size: 2
+  epochs: 30
+  learning_rate: 6.0e-5
+  weight_decay: 0.01
+  dice_weight: 1.0
+  bce_weight: 1.0
+  num_workers: 2
+  val_fraction: 0.2
+  seed: 42
+  early_stopping_patience: 8
+  # Domain / UI fine-tunes — keep separate from oam_tcd_30cm baseline
+  checkpoint_dir: outputs/checkpoints/gfk_finetune
+
+postprocess:
+  threshold: 0.5
+  min_area_m2: 5.0
+  morph_open_px: 3
+  morph_close_px: 5
+  write_clean_mask: true
+  write_geojson: false

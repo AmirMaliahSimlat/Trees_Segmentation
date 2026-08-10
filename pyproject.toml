@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tree-seg"
+version = "0.1.0"
+description = "Binary tree canopy semantic segmentation for aerial GeoTIFF orthomosaics"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.1",
+  "torchvision>=0.16",
+  "transformers>=4.40",
+  "accelerate>=0.27",
+  "safetensors>=0.4",
+  "rasterio>=1.3",
+  "numpy>=1.26",
+  "pillow>=10.0",
+  "opencv-python-headless>=4.8",
+  "albumentations>=1.4",
+  "geopandas>=0.14",
+  "shapely>=2.0",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "scikit-image>=0.22",
+  "matplotlib>=3.8",
+  "gradio>=4.44",
+  "datasets>=2.18",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+tree-seg-predict = "tree_seg.cli:predict_main"
+tree-seg-prepare-annotation = "tree_seg.cli:prepare_annotation_main"
+tree-seg-train = "tree_seg.cli:train_main"
+tree-seg-export-shapefile = "tree_seg.cli:export_shapefile_main"
+tree-seg-batch-predict = "tree_seg.cli:batch_predict_main"
+tree-seg-review = "tree_seg.cli:review_ui_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

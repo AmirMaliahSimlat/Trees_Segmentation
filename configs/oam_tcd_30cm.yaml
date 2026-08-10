@@ -1,0 +1,32 @@
+# Fine-tune pretrained Restor SegFormer on OAM-TCD downsampled to ~30 cm/px.
+# Checkpoint lives ONLY under outputs/checkpoints/oam_tcd_30cm — do not overwrite
+# with GFK / UI fine-tunes (those go to outputs/checkpoints/gfk_finetune).
+
+model:
+  name: restor/tcd-segformer-mit-b5
+  num_labels: 2
+  id2label:
+    0: background
+    1: tree
+
+train:
+  image_size: 512
+  batch_size: 2
+  epochs: 12
+  learning_rate: 3.0e-5
+  weight_decay: 0.01
+  dice_weight: 1.0
+  bce_weight: 1.0
+  num_workers: 0
+  val_fraction: 0.0
+  seed: 42
+  early_stopping_patience: 4
+  checkpoint_dir: outputs/checkpoints/oam_tcd_30cm
+
+predict:
+  tile_size: 1024
+  overlap: 0.25
+  threshold: 0.5
+  match_train_gsd: false
+  train_gsd_m: 0.30
+  native_gsd_m: 0.30
