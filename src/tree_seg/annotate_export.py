@@ -30,13 +30,16 @@ def uncertainty_score(proba: np.ndarray) -> float:
     return float(ent.mean())
 
 
-def make_overlay(rgb: np.ndarray, proba: np.ndarray, alpha: float = 0.45) -> np.ndarray:
-    """Green overlay proportional to tree probability."""
+def make_overlay(rgb: np.ndarray, proba: np.ndarray, alpha: float = 0.55) -> np.ndarray:
+    """Bright pink/purple overlay proportional to tree probability."""
     overlay = rgb.astype(np.float32).copy()
     color = np.zeros_like(overlay)
-    color[..., 1] = 255.0  # green
+    color[..., 0] = 255.0
+    color[..., 1] = 32.0
+    color[..., 2] = 255.0
     w = np.clip(proba, 0, 1)[..., None] * alpha
-    out = overlay * (1.0 - w) + color * w
+    glow = np.clip(overlay * 1.25 + 40.0, 0, 255)
+    out = glow * (1.0 - w) + color * w
     return np.clip(out, 0, 255).astype(np.uint8)
 
 

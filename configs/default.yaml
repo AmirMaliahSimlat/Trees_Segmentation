@@ -46,3 +46,4 @@ postprocess:
   morph_close_px: 5
   write_clean_mask: true
   write_geojson: false
+  per_tile_folder: true

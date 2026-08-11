@@ -7,6 +7,7 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio
 from rasterio import features
 from shapely.geometry import shape
@@ -73,12 +74,13 @@ def export_polygons(
     native_gsd_m: float | None = None,
     write_clean_mask: bool = True,
     write_geojson: bool = False,
+    per_tile_folder: bool = True,
 ) -> dict[str, Path]:
     """
     From a probability or mask GeoTIFF, write tree-area footprint polygons as a shapefile.
 
-    Primary deliverable: ``*_tree_footprints.shp`` (+ sidecar files).
-    Optionally also writes a cleaned mask GeoTIFF and GeoJSON.
+    Primary deliverable: ``<stem>/<stem>_tree_footprints.shp`` (+ sidecar files).
+    Optionally also writes a cleaned mask GeoTIFF and GeoJSON in the same folder.
     """
     mask_or_proba_path = Path(mask_or_proba_path)
     output_dir = Path(output_dir)
@@ -88,6 +90,8 @@ def export_polygons(
         .replace("_tree_mask_clean", "")
         .replace("_tree_mask", "")
     )
+    tile_dir = (output_dir / stem) if per_tile_folder else output_dir
+    tile_dir.mkdir(parents=True, exist_ok=True)
 
     with rasterio.open(mask_or_proba_path) as ds:
         data = ds.read(1)
@@ -104,9 +108,9 @@ def export_polygons(
 
         mask = morphological_cleanup(mask, open_px=morph_open_px, close_px=morph_close_px)
 
-        paths: dict[str, Path] = {}
+        paths: dict[str, Path] = {"folder": tile_dir}
         if write_clean_mask:
-            clean_path = output_dir / f"{stem}_tree_mask_clean.tif"
+            clean_path = tile_dir / f"{stem}_tree_mask_clean.tif"
             write_geotiff(clean_path, mask, transform, crs, nodata=0, dtype="uint8")
             paths["mask_clean"] = clean_path
 
@@ -116,12 +120,12 @@ def export_polygons(
         if len(gdf) == 0:
             gdf = gpd.GeoDataFrame({"id": [], "area_m2": [], "geometry": []}, crs=crs)
 
-        shp_path = output_dir / f"{stem}_tree_footprints.shp"
+        shp_path = tile_dir / f"{stem}_tree_footprints.shp"
         gdf.to_file(shp_path, driver="ESRI Shapefile")
         paths["shapefile"] = shp_path
 
         if write_geojson:
-            geojson_path = output_dir / f"{stem}_tree_footprints.geojson"
+            geojson_path = tile_dir / f"{stem}_tree_footprints.geojson"
             gdf.to_file(geojson_path, driver="GeoJSON")
             paths["geojson"] = geojson_path
 
@@ -130,6 +134,96 @@ def export_polygons(
 
 # Backwards-compatible alias
 export_for_unreal = export_polygons
+
+
+def merge_footprint_shapefiles(
+    input_dir: str | Path,
+    output_path: str | Path,
+    *,
+    pattern: str = "**/*_tree_footprints.shp",
+    dissolve: bool = False,
+) -> Path:
+    """
+    Merge per-tile footprint shapefiles under ``input_dir`` into one map shapefile.
+
+    Adds a ``tile_id`` attribute from the parent folder / filename stem.
+    If ``dissolve`` is True, overlapping/touching polygons are unioned into multipolygons
+    (slower; usually leave False and dissolve in QGIS if needed).
+    """
+    input_dir = Path(input_dir)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(input_dir.glob(pattern))
+    # Avoid merging an existing combined output into itself
+    files = [f for f in files if f.resolve() != output_path.resolve()]
+    if not files:
+        raise FileNotFoundError(f"No footprint shapefiles matching {pattern} under {input_dir}")
+
+    frames: list[gpd.GeoDataFrame] = []
+    for shp in files:
+        gdf = gpd.read_file(shp)
+        if gdf.empty:
+            continue
+        tile_id = shp.stem.replace("_tree_footprints", "")
+        gdf = gdf.copy()
+        gdf["tile_id"] = tile_id
+        frames.append(gdf)
+
+    if not frames:
+        raise ValueError(f"All shapefiles under {input_dir} were empty")
+
+    merged = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=frames[0].crs)
+    # Reassign sequential ids across the whole map
+    merged["id"] = range(1, len(merged) + 1)
+
+    if dissolve:
+        from shapely.ops import unary_union
+
+        geom = unary_union(merged.geometry.values)
+        if geom.geom_type == "Polygon":
+            geoms = [geom]
+        else:
+            geoms = list(geom.geoms)
+        merged = gpd.GeoDataFrame(
+            {"id": list(range(1, len(geoms) + 1)), "geometry": geoms},
+            crs=merged.crs,
+        )
+
+    merged.to_file(output_path, driver="ESRI Shapefile")
+    return output_path
+
+
+def export_map_footprints(
+    mask_dir: str | Path,
+    output_dir: str | Path,
+    cfg: dict[str, Any],
+    *,
+    map_name: str | None = None,
+    mask_glob: str = "*_tree_mask.tif",
+) -> dict[str, Path]:
+    """
+    Export every mask GeoTIFF in ``mask_dir`` to per-tile folders, then merge into one map shapefile.
+    """
+    mask_dir = Path(mask_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    map_name = map_name or mask_dir.name
+
+    masks = sorted(mask_dir.glob(mask_glob))
+    if not masks:
+        # also accept nested folders
+        masks = sorted(mask_dir.rglob(mask_glob))
+    if not masks:
+        raise FileNotFoundError(f"No masks matching {mask_glob} in {mask_dir}")
+
+    tile_paths = []
+    for mask_path in masks:
+        paths = export_from_config(mask_path, output_dir, cfg)
+        tile_paths.append(paths["shapefile"])
+
+    merged = merge_footprint_shapefiles(output_dir, combined)
+    return {"map_shapefile": merged, "n_tiles": len(tile_paths)}
 
 
 def export_from_config(mask_path: str | Path, output_dir: str | Path, cfg: dict[str, Any]) -> dict[str, Path]:
@@ -145,4 +239,5 @@ def export_from_config(mask_path: str | Path, output_dir: str | Path, cfg: dict[
         native_gsd_m=pred.get("native_gsd_m"),
         write_clean_mask=bool(p.get("write_clean_mask", True)),
         write_geojson=bool(p.get("write_geojson", False)),
+        per_tile_folder=bool(p.get("per_tile_folder", True)),
     )

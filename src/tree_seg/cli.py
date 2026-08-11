@@ -147,6 +147,77 @@ def export_shapefile_main(argv: list[str] | None = None) -> None:
         print(f"  {k}: {v}")
 
 
+def merge_shapefiles_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="Merge per-tile footprint shapefiles into one map shapefile"
+    )
+    parser.add_argument(
+        "--input",
+        "-i",
+        type=Path,
+        required=True,
+        help="Folder containing per-tile footprint shapefiles (searched recursively)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        required=True,
+        help="Output combined .shp path (e.g. outputs/footprints/GFK/GFK_tree_footprints.shp)",
+    )
+    parser.add_argument(
+        "--dissolve",
+        action="store_true",
+        help="Union touching/overlapping polygons into one layer geometry set",
+    )
+    args = parser.parse_args(argv)
+
+    from tree_seg.postprocess import merge_footprint_shapefiles
+
+    out = merge_footprint_shapefiles(args.input, args.output, dissolve=args.dissolve)
+    print(f"Wrote combined shapefile: {out}")
+
+
+def export_map_shapefile_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="Export all mask GeoTIFFs in a folder to per-tile shapefiles + one map shapefile"
+    )
+    parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument(
+        "--input",
+        "-i",
+        type=Path,
+        required=True,
+        help="Folder of *_tree_mask.tif files (e.g. data/review/geotiff_masks)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        required=True,
+        help="Output map folder (e.g. outputs/footprints/GFK)",
+    )
+    parser.add_argument(
+        "--map-name",
+        type=str,
+        default=None,
+        help="Name for combined shapefile prefix (default: output folder name)",
+    )
+    args = parser.parse_args(argv)
+
+    from tree_seg.postprocess import export_map_footprints
+
+    cfg = load_config(args.config)
+    result = export_map_footprints(
+        args.input,
+        args.output,
+        cfg,
+        map_name=args.map_name or Path(args.output).name,
+    )
+    print(f"Tiles exported: {result['n_tiles']}")
+    print(f"Combined map shapefile: {result['map_shapefile']}")
+
+
 def batch_predict_main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Batch-predict a folder of tiles into a review session")
     _add_common(parser)

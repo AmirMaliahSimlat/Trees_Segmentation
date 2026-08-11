@@ -204,12 +204,22 @@ def _normalize_mask(mask: np.ndarray) -> np.ndarray:
     return (mask > 127).astype(np.uint8) * 255
 
 
-def overlay_rgb(rgb: np.ndarray, mask: np.ndarray, alpha: float = 0.45) -> np.ndarray:
+def overlay_rgb(rgb: np.ndarray, mask: np.ndarray, alpha: float = 0.55) -> np.ndarray:
+    """Blend a bright glowing pink/purple over tree pixels."""
     out = rgb.astype(np.float32).copy()
-    m = (mask > 0).astype(np.float32)[..., None] * alpha
+    m = (mask > 0).astype(np.float32)[..., None]
+    if not m.any():
+        return rgb
+    # Hot magenta / neon pink-purple
     color = np.zeros_like(out)
-    color[..., 1] = 255.0
-    return np.clip(out * (1.0 - m) + color * m, 0, 255).astype(np.uint8)
+    color[..., 0] = 255.0  # R
+    color[..., 1] = 32.0   # G
+    color[..., 2] = 255.0  # B
+    # Soft glow: brighten underlying pixels slightly under the mask
+    glow = np.clip(out * 1.25 + 40.0, 0, 255)
+    blended = glow * (1.0 - alpha) + color * alpha
+    result = out * (1.0 - m) + blended * m
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def summarize_session(session: ReviewSession) -> str:

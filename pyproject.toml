@@ -38,6 +38,8 @@ tree-seg-predict = "tree_seg.cli:predict_main"
 tree-seg-prepare-annotation = "tree_seg.cli:prepare_annotation_main"
 tree-seg-train = "tree_seg.cli:train_main"
 tree-seg-export-shapefile = "tree_seg.cli:export_shapefile_main"
+tree-seg-merge-shapefiles = "tree_seg.cli:merge_shapefiles_main"
+tree-seg-export-map = "tree_seg.cli:export_map_shapefile_main"
 tree-seg-batch-predict = "tree_seg.cli:batch_predict_main"
 tree-seg-review = "tree_seg.cli:review_ui_main"
 

@@ -55,11 +55,25 @@ python scripts/batch_predict.py -i data/raw --checkpoint outputs/checkpoints/bes
 
 ### Export shapefile footprints
 
+Per tile (folder with `.shp` + sidecars + clean `.tif`):
+
 ```bash
-python scripts/export_shapefile.py -i path/to/tile_tree_mask.tif -o outputs/footprints
+python scripts/export_shapefile.py -i path/to/tile_tree_mask.tif -o outputs/footprints/GFK
 ```
 
-Primary output: `*_tree_footprints.shp` with polygon footprints (`id`, `area_m2`).
+Whole map (all tile masks → per-tile folders + **one combined shapefile**):
+
+```bash
+python scripts/export_map_shapefile.py -i data/review/geotiff_masks -o outputs/footprints/GFK --map-name GFK
+```
+
+Or merge existing per-tile shapefiles only:
+
+```bash
+python scripts/merge_shapefiles.py -i outputs/footprints/GFK -o outputs/footprints/GFK/GFK_tree_footprints.shp
+```
+
+Combined output: `GFK_tree_footprints.shp` (EPSG from source GeoTIFFs) for QGIS.
 
 ### Single-file CLI predict
 
