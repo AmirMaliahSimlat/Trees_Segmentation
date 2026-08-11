@@ -257,6 +257,49 @@ def batch_predict_main(argv: list[str] | None = None) -> None:
     print(f"Session: {session_dir}")
 
 
+def split_geotiff_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description="Split a large GeoTIFF into smaller georeferenced tiles (streaming)"
+    )
+    parser.add_argument("--input", "-i", type=Path, required=True, help="Large input GeoTIFF")
+    parser.add_argument("--output", "-o", type=Path, required=True, help="Output tile folder")
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=10240,
+        help="Tile edge length in pixels (default: 10240, same scale as GFK tiles)",
+    )
+    parser.add_argument(
+        "--overlap",
+        type=int,
+        default=0,
+        help="Overlap in pixels between tiles (default: 0; predict adds its own overlap)",
+    )
+    parser.add_argument("--prefix", type=str, default=None, help="Output filename prefix")
+    parser.add_argument(
+        "--keep-empty",
+        action="store_true",
+        help="Keep nearly empty / nodata tiles (skipped by default)",
+    )
+    args = parser.parse_args(argv)
+
+    from tree_seg.split_geotiff import split_geotiff
+
+    summary = split_geotiff(
+        args.input,
+        args.output,
+        tile_size=args.tile_size,
+        overlap=args.overlap,
+        skip_empty=not args.keep_empty,
+        prefix=args.prefix,
+    )
+    print(
+        f"Wrote {summary['tiles_written']} tiles "
+        f"({summary['tiles_skipped_empty']} empty skipped) → {args.output}"
+    )
+    print(f"Manifest: {Path(args.output) / 'manifest.json'}")
+
+
 def review_ui_main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Launch tree canopy review UI")
     parser.add_argument("--config", type=Path, default=None)

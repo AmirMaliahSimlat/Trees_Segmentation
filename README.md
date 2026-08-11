@@ -17,6 +17,20 @@ copy .env.example .env
 
 Put your tile images in `data/raw/` (GeoTIFF preferred; PNG/JPG also work for review/train).
 
+### Large single-map GeoTIFF (e.g. 35 GB)
+
+Do **not** run predict on the whole file. Split it first into ~10k×10k tiles (streaming, low RAM):
+
+```bash
+python scripts/split_geotiff.py -i path/to/huge_map.tif -o data/raw/MAP_NAME --tile-size 10240
+```
+
+Then batch-predict the tile folder as usual:
+
+```bash
+python scripts/batch_predict.py -i data/raw/MAP_NAME --checkpoint outputs/checkpoints/oam_tcd_30cm/best --no-skip
+```
+
 ### Checkpoints (roll-back)
 
 | Path | Purpose |
