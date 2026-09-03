@@ -11,7 +11,7 @@ from PIL import Image
 from tree_seg.annotate_export import import_corrected_masks
 from tree_seg.train import train_segformer
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ANN = ROOT / "outputs" / "smoke" / "ann"
 
 

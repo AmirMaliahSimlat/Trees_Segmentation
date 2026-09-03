@@ -1,0 +1,31 @@
+# Dedicated building-footprint SegFormer. Isolated checkpoint.
+# Do not write to oam_tcd_30cm, orchard_*, roof_types, or ground_fill.
+
+model:
+  name: nvidia/segformer-b5-finetuned-ade-640-640
+  num_labels: 2
+  id2label:
+    0: background
+    1: building
+
+train:
+  image_size: 512
+  batch_size: 2
+  epochs: 8
+  learning_rate: 6.0e-5
+  weight_decay: 0.01
+  dice_weight: 1.0
+  bce_weight: 1.0
+  num_workers: 0
+  val_fraction: 0.1
+  seed: 42
+  early_stopping_patience: 3
+  checkpoint_dir: outputs/checkpoints/building_footprints
+
+predict:
+  tile_size: 1024
+  overlap: 0.25
+  threshold: 0.5
+  match_train_gsd: false
+  train_gsd_m: 0.30
+  native_gsd_m: 0.30

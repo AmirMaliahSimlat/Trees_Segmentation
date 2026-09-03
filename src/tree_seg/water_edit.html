@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OEM water editor</title>
+  <script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.1/build/openseadragon/openseadragon.min.js"></script>
+  <style>
+    :root {
+      --bg: #12151a;
+      --panel: #1b2028;
+      --line: #2c3440;
+      --text: #e8edf4;
+      --muted: #8b97a8;
+      --accent: #3dbbff;
+      --danger: #ff6b6b;
+      --ok: #5bd08a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.4 Segoe UI, system-ui, sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    #bar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 8px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+    #bar label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    select, button, input[type="range"], input[type="number"] { font: inherit; }
+    input[type="number"] {
+      width: 5.5em; background: #252c36; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 8px;
+    }
+    select, button {
+      background: #252c36; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 10px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.active { background: #0f3a52; border-color: var(--accent); color: var(--accent); }
+    button.save { background: #163524; border-color: #2e6b46; }
+    button.danger { border-color: #5a2a2a; }
+    #work { display: flex; flex: 1 1 0; min-height: 0; overflow: hidden; }
+    #stage { flex: 1 1 0; min-width: 0; min-height: 0; position: relative; background: #0b0d10; }
+    #viewer { position: absolute; inset: 0; width: 100%; height: 100%; background: #0b0d10; touch-action: none; }
+    #mask-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+    #draw-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+    input[type="color"] {
+      width: 2em; height: 1.85em; padding: 0; border: 1px solid var(--line);
+      background: #252c36; border-radius: 6px; cursor: pointer;
+    }
+    #blob-panel {
+      width: 260px; flex: 0 0 260px; background: var(--panel); border-left: 1px solid var(--line);
+      display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+    }
+    #blob-head {
+      display: flex; align-items: center; gap: 6px; padding: 8px;
+      border-bottom: 1px solid var(--line); color: var(--muted);
+    }
+    #blob-head strong { color: var(--text); }
+    #blob-list, #hole-list { overflow: auto; flex: 1; min-height: 0; }
+    .blob-item { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; border-bottom: 1px solid var(--line); padding: 7px 10px; }
+    .blob-item:hover { border-color: var(--line); background: #252c36; }
+    .blob-item.current { background: #0f3a52; color: var(--accent); }
+    .blob-item.hole.current { background: #3a2a12; color: #ffb020; }
+    .blob-item.hole.kept { color: #5bd08a; }
+    .blob-item.hole.kept.current { background: #163524; color: #5bd08a; }
+    #status { color: var(--muted); padding: 6px 10px; border-top: 1px solid var(--line); flex: 0 0 auto; }
+    #cursor {
+      position: fixed; pointer-events: none; border: 2px solid #3dbbff;
+      border-radius: 50%; display: none; z-index: 20; mix-blend-mode: difference;
+    }
+    #map-overlay {
+      position: fixed; inset: 0; z-index: 30; background: rgba(8, 10, 14, 0.94);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    #map-overlay.hidden { display: none; }
+    #map-nhood { display: flex; gap: 8px; align-items: center; }
+    #map-nhood span { color: var(--muted); }
+    #map-title { font-size: 15px; }
+    #map-hint { color: var(--muted); }
+    #map-stage { position: relative; display: inline-block; line-height: 0; max-width: 96vw; }
+    #map-img { display: block; max-width: 96vw; max-height: calc(96vh - 70px); image-rendering: pixelated; }
+    #map-grid { position: absolute; left: 0; top: 0; width: 100%; height: 100%; cursor: pointer; }
+    kbd { background: #252c36; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--text); }
+    #current-tile { color: var(--accent); min-width: 12em; }
+    #load-overlay {
+      position: fixed; inset: 0; z-index: 40; background: rgba(8, 10, 14, 0.82);
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    #load-overlay.hidden { display: none; }
+    #load-card {
+      width: min(560px, 94vw); background: var(--panel); border: 1px solid var(--line);
+      border-radius: 10px; padding: 16px 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    }
+    #load-title { font-size: 15px; margin-bottom: 4px; }
+    #load-sub { color: var(--muted); min-height: 1.3em; }
+    #load-bar { height: 7px; background: #252c36; border-radius: 4px; overflow: hidden; margin: 10px 0 4px; }
+    #load-bar-fill { height: 100%; width: 0; background: var(--accent); }
+    #load-pct { color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+    #load-steps { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+    #load-steps li {
+      display: grid; grid-template-columns: 1.4em 4.5em 1fr auto; gap: 8px; align-items: baseline;
+      padding: 5px 0; border-bottom: 1px solid var(--line); color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #load-steps li .mark { text-align: center; }
+    #load-steps li.active { color: var(--accent); }
+    #load-steps li.done { color: var(--ok); }
+    #load-steps li.skip { color: var(--muted); }
+    #load-steps li .role { color: inherit; opacity: 0.85; }
+    #load-steps li .detail { color: inherit; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="bar">
+      <button id="b-map" title="Whole-map overview">Map</button>
+      <span id="current-tile">no 3×3 loaded</span>
+      <button id="b-pan" class="active" data-mode="pan" title="Left-drag to pan. In paint/erase, right-drag or middle-drag also pans.">Pan</button>
+      <button id="b-del" data-mode="delete">Delete blob</button>
+      <button id="b-fill" data-mode="fill">Paint water</button>
+      <button id="b-erase" data-mode="erase">Erase</button>
+      <button id="b-lasso" title="Lasso: drag a loop to paint/erase a large area. Click vertices for a polygon; Enter or double-click to close. Esc cancels. (L)">Lasso</button>
+      <label>Brush <input id="radius" type="range" min="2" max="80" value="14" /> <span id="radius-v">14</span> px</label>
+      <button id="b-mask" class="active" title="Toggle water mask (M)">Mask on</button>
+      <label>Color <input id="mask-color" type="color" value="#00aaff" title="Water mask color" /></label>
+      <label>Overlay <input id="opacity" type="range" min="0" max="100" value="45" /></label>
+      <button id="b-undo">Undo</button>
+      <button id="b-reset" class="danger">Reset OEM</button>
+      <button id="b-save" class="save">Save mask + shapefile</button>
+      <button id="b-fill-hole" title="Fill current hole (F)">Fill hole</button>
+      <label>Min px <input id="min-blob-px" type="number" min="1" step="1" value="10" /></label>
+      <button id="b-keep" title="Mark the current blob or hole as correct so prune/fill-small will skip it (K)">Mark correct</button>
+      <button id="b-prune" title="Delete water blobs smaller than min px">Remove smaller blobs</button>
+      <button id="b-prune-holes" title="Fill holes smaller than min px">Fill smaller holes</button>
+      <button id="b-prev" title="Previous blob (<)">&lt;</button>
+      <button id="b-next" title="Next blob (>)">&gt;</button>
+      <span id="blob-pos" style="color:var(--muted)"></span>
+      <button id="b-hole-prev" title="Previous hole ([)">[</button>
+      <button id="b-hole-next" title="Next hole (])">]</button>
+      <span id="hole-pos" style="color:var(--muted)"></span>
+    </div>
+    <div id="work">
+      <div id="stage">
+        <div id="viewer"></div>
+        <canvas id="mask-layer"></canvas>
+        <canvas id="draw-layer"></canvas>
+      </div>
+      <aside id="blob-panel">
+        <div id="blob-head">
+          <strong>Blobs</strong>
+          <span id="blob-count">0</span>
+          <button id="b-prev2" title="Previous blob (<)">&lt;</button>
+          <button id="b-next2" title="Next blob (>)">&gt;</button>
+        </div>
+        <div id="blob-list"></div>
+        <div id="blob-head">
+          <strong>Holes</strong>
+          <span id="hole-count">0</span>
+          <button id="b-hole-prev2" title="Previous hole ([)">[</button>
+          <button id="b-hole-next2" title="Next hole (])">]</button>
+        </div>
+        <div id="hole-list"></div>
+      </aside>
+    </div>
+    <div id="status">Loading ortho into memory…</div>
+  </div>
+  <div id="map-overlay">
+    <div id="map-card">
+      <div id="map-title">Choose 1 tile or a 3×3 block, then click a tile on the map.</div>
+      <div id="map-nhood">
+        <span>Load</span>
+        <button id="b-nhood-1" type="button">1 tile</button>
+        <button id="b-nhood-9" type="button" class="active">3×3 tiles</button>
+      </div>
+      <div id="map-stage">
+        <img id="map-img" alt="Fort Riley overview" />
+        <canvas id="map-grid"></canvas>
+      </div>
+      <div id="map-hint">Edge tiles are disabled (no full 3×3). Cyan = water mask already exists. First visit builds this low-res mosaic.</div>
+    </div>
+  </div>
+  <div id="load-overlay" class="hidden">
+    <div id="load-card">
+      <div id="load-title">Loading 3×3</div>
+      <div id="load-sub"></div>
+      <div id="load-bar"><div id="load-bar-fill"></div></div>
+      <div id="load-pct">0 / 9</div>
+      <ul id="load-steps"></ul>
+    </div>
+  </div>
+  <div id="cursor"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let viewer = null;
+    let meta = { open: false };
+    let mode = "pan";
+    let drawing = false;
+    let stroke = [];
+    let drawPointer = null;
+    let maskItem = null;
+    let maskOn = true;
+    let lastOpacity = 45;
+    let maskColor = "#00aaff";
+    const maskImages = new Map();
+    const maskInflight = new Set();
+    const tintCache = new Map();
+    let lastMaskGen = -1;
+    let maskHoldLevel = null;
+    let blobs = [];
+    let blobIndex = 0;
+    let holes = [];
+    let holeIndex = 0;
+    let focusKind = "blob";
+    let overview = null;
+    let hoverCell = null;
+    let localStrokes = [];
+    let brushFlush = Promise.resolve();
+    let editEpoch = 0;
+    let shape = "brush";
+    let lassoBuilding = false;
+    let lassoHover = null;
+    let panDrag = null;
+    let nhood = 9;
+
+    function setStatus() {
+      if (!meta.open) { $("status").textContent = "Pick an interior tile on the map."; return; }
+      const km2 = (meta.water_m2 / 1e6).toFixed(3);
+      const dirty = meta.dirty ? "unsaved" : "saved";
+      const n = meta.n_tiles || 1;
+      const label = n > 1 ? `3×3 around ${meta.stem}` : meta.stem;
+      $("current-tile").textContent = label;
+      const nBlobs = blobs.length;
+      const nHoles = holes.length;
+      $("status").innerHTML =
+        `${label}  ·  ${meta.width}×${meta.height}  ·  ${nBlobs} blobs  ·  ${nHoles} holes  ·  ${km2} km² water  ·  undo ${meta.undo}  ·  ${dirty}
+         &nbsp; <kbd>V</kbd> pan <kbd>D</kbd> delete <kbd>B</kbd> paint <kbd>E</kbd> erase <kbd>L</kbd> lasso <kbd>M</kbd> mask <kbd>K</kbd> correct <kbd>&lt;</kbd> <kbd>&gt;</kbd> blobs <kbd>[</kbd> <kbd>]</kbd> holes <kbd>F</kbd> fill hole <kbd>X</kbd> delete blob
+         &nbsp; · right/middle-drag pans`;
+    }
+
+    function formatArea(b) {
+      return `${b.area_px} px`;
+    }
+
+    function renderBlobList() {
+      const list = $("blob-list");
+      list.innerHTML = "";
+      $("blob-count").textContent = String(blobs.length);
+      $("blob-pos").textContent = blobs.length ? `${blobIndex + 1} / ${blobs.length}` : "0 / 0";
+      blobs.forEach((b, i) => {
+        const btn = document.createElement("button");
+        btn.className = "blob-item" + (i === blobIndex && focusKind === "blob" ? " current" : "") + (b.kept ? " kept" : "");
+        btn.innerHTML = `#${i + 1} ${b.kept ? "✓ " : ""}<span class="sz">${formatArea(b)} · ${b.w}×${b.h}</span>`;
+        btn.addEventListener("click", () => goToBlob(i, true));
+        list.appendChild(btn);
+      });
+      const cur = list.querySelector(".current");
+      if (cur) cur.scrollIntoView({ block: "nearest" });
+    }
+
+    function renderHoleList() {
+      const list = $("hole-list");
+      if (!list) return;
+      list.innerHTML = "";
+      $("hole-count").textContent = String(holes.length);
+      $("hole-pos").textContent = holes.length ? `${holeIndex + 1} / ${holes.length}` : "0 / 0";
+      holes.forEach((b, i) => {
+        const btn = document.createElement("button");
+        btn.className = "blob-item hole" + (i === holeIndex && focusKind === "hole" ? " current" : "") + (b.kept ? " kept" : "");
+        btn.innerHTML = `#${i + 1} ${b.kept ? "✓ " : ""}<span class="sz">${formatArea(b)} · ${b.w}×${b.h}</span>`;
+        btn.addEventListener("click", () => goToHole(i, true));
+        list.appendChild(btn);
+      });
+      const cur = list.querySelector(".current");
+      if (cur) cur.scrollIntoView({ block: "nearest" });
+    }
+
+    function renderLists() {
+      renderBlobList();
+      renderHoleList();
+      syncKeepButton();
+    }
+
+    function syncKeepButton() {
+      const btn = $("b-keep");
+      if (!btn) return;
+      const b = focusKind === "hole" ? holes[holeIndex] : blobs[blobIndex];
+      const on = !!(b && b.kept);
+      btn.classList.toggle("active", on);
+      const noun = focusKind === "hole" ? "hole" : "blob";
+      btn.textContent = on ? `Correct ✓` : `Mark correct`;
+      btn.title = on
+        ? `Unmark this ${noun} (K)`
+        : `Mark this ${noun} as correct so the size threshold will skip it (K)`;
+    }
+
+    async function toggleCurrentKept() {
+      const kind = focusKind === "hole" ? "hole" : "blob";
+      const list = kind === "hole" ? holes : blobs;
+      const idx = kind === "hole" ? holeIndex : blobIndex;
+      const b = list[idx];
+      if (!b) return;
+      try {
+        const s = await api("/api/keep", { x: Math.round(b.cx), y: Math.round(b.cy), kind });
+        if (!s.ok) {
+          $("status").textContent = s.reason || "Mark missed";
+          return;
+        }
+        b.kept = !!s.kept;
+        renderLists();
+        drawOverlay();
+        const n = list.filter((x) => x.kept).length;
+        const noun = kind === "hole" ? "hole" : "blob";
+        const action = kind === "hole" ? "fill-small" : "prune";
+        $("status").textContent = s.kept
+          ? `Marked ${noun} #${idx + 1} correct (${n} protected from ${action})`
+          : `Unmarked ${noun} #${idx + 1} (${n} protected from ${action})`;
+      } catch (err) {
+        $("status").textContent = String(err);
+      }
+    }
+
+    function zoomToBlob(b) {
+      if (!viewer || !b || !viewer.viewport) return;
+      const minSpan = 256;
+      const span = Math.max(minSpan, b.w * 2.8, b.h * 2.8);
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      const imgRect = new OpenSeadragon.Rect(cx - span / 2, cy - span / 2, span, span);
+      let vpRect = imgRect;
+      try {
+        const item = viewer.world.getItemAt(0);
+        vpRect = item ? item.imageToViewportRectangle(imgRect) : viewer.viewport.imageToViewportRectangle(imgRect);
+      } catch (_) {
+        vpRect = viewer.viewport.imageToViewportRectangle(imgRect);
+      }
+      viewer.viewport.fitBounds(vpRect, false);
+    }
+
+    function goToBlob(i, zoom) {
+      focusKind = "blob";
+      if (!blobs.length) {
+        blobIndex = 0;
+        renderLists();
+        drawOverlay();
+        return;
+      }
+      blobIndex = ((i % blobs.length) + blobs.length) % blobs.length;
+      renderLists();
+      if (zoom) zoomToBlob(blobs[blobIndex]);
+      drawOverlay();
+    }
+
+    function goToHole(i, zoom) {
+      focusKind = "hole";
+      if (!holes.length) {
+        holeIndex = 0;
+        renderLists();
+        drawOverlay();
+        return;
+      }
+      holeIndex = ((i % holes.length) + holes.length) % holes.length;
+      renderLists();
+      if (zoom) zoomToBlob(holes[holeIndex]);
+      drawOverlay();
+    }
+
+    function stepBlob(dir) {
+      if (!blobs.length) return;
+      goToBlob(blobIndex + dir, true);
+    }
+
+    function stepHole(dir) {
+      if (!holes.length) return;
+      goToHole(holeIndex + dir, true);
+    }
+
+    async function loadBlobs(keepIndex) {
+      const data = await api("/api/blobs");
+      blobs = data.blobs || [];
+      holes = data.holes || [];
+      const next = keepIndex ? Math.min(blobIndex, Math.max(0, blobs.length - 1)) : 0;
+      holeIndex = keepIndex ? Math.min(holeIndex, Math.max(0, holes.length - 1)) : 0;
+      goToBlob(next, false);
+      setStatus();
+    }
+
+    async function refreshAndJumpToNext(fromIndex) {
+      reloadMask();
+      if (fromIndex >= 0 && fromIndex < blobs.length) blobs.splice(fromIndex, 1);
+      const next = blobs.length ? Math.min(fromIndex, blobs.length - 1) : 0;
+      requestAnimationFrame(() => goToBlob(next, true));
+      scheduleBlobRefresh();
+    }
+
+    async function refreshAndJumpToNextHole(fromIndex) {
+      reloadMask();
+      if (fromIndex >= 0 && fromIndex < holes.length) holes.splice(fromIndex, 1);
+      const next = holes.length ? Math.min(fromIndex, holes.length - 1) : 0;
+      requestAnimationFrame(() => goToHole(next, true));
+      scheduleBlobRefresh();
+    }
+
+    async function fillCurrentHole() {
+      const b = holes[holeIndex];
+      if (!b) return;
+      const from = holeIndex;
+      await flushEdits();
+      const s = await api("/api/fill-hole", { x: Math.round(b.cx), y: Math.round(b.cy) });
+      meta = s;
+      setStatus();
+      if (s.ok) await refreshAndJumpToNextHole(from);
+    }
+
+    async function deleteCurrentBlob() {
+      const b = blobs[blobIndex];
+      if (!b) return;
+      const from = blobIndex;
+      try {
+        await flushEdits();
+        const s = await api("/api/delete", { x: Math.round(b.cx), y: Math.round(b.cy) });
+        meta = s;
+        setStatus();
+        if (!s.ok) {
+          $("status").textContent = s.reason || "Delete missed (click water)";
+          return;
+        }
+        await refreshAndJumpToNext(from);
+      } catch (err) {
+        $("status").textContent = String(err);
+      }
+    }
+
+    async function api(path, body) {
+      const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      const res = await fetch(path, opt);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function overlayAlpha() {
+      return maskOn ? Number($("opacity").value) : 0;
+    }
+    function rgbSource() {
+      const maxLevel = Math.max(0, meta.max_level || 0);
+      return {
+        width: meta.width,
+        height: meta.height,
+        tileSize: meta.tile,
+        maxLevel,
+        minLevel: Math.max(0, maxLevel - 8),
+        tileOverlap: 0,
+        getTileUrl: (level, x, y) =>
+          `/tiles/rgb/${level}/${x}/${y}.jpg?w=${meta.width}&h=${meta.height}`,
+      };
+    }
+
+    function loadMaskColor() {
+      try {
+        const saved = localStorage.getItem("water-mask-color");
+        if (saved && /^#[0-9a-fA-F]{6}$/.test(saved)) maskColor = saved;
+      } catch (_) {}
+      $("mask-color").value = maskColor;
+    }
+
+    function clientToImage(ev) {
+      const ip = viewer.viewport.windowToImageCoordinates(new OpenSeadragon.Point(ev.clientX, ev.clientY));
+      return { x: Math.floor(ip.x), y: Math.floor(ip.y) };
+    }
+
+    function setMode(next) {
+      if ((drawing || lassoBuilding) && next !== "fill" && next !== "erase") cancelLasso();
+      mode = next;
+      for (const id of ["b-pan", "b-del", "b-fill", "b-erase"]) {
+        $(id).classList.toggle("active", $(id).dataset.mode === mode);
+      }
+      applyNav();
+      syncCursorStyle();
+      if (mode === "pan" || mode === "delete") $("cursor").style.display = "none";
+    }
+
+    function setShape(next) {
+      if (next !== "lasso" && (drawing || lassoBuilding)) cancelLasso();
+      shape = next;
+      $("b-lasso").classList.toggle("active", shape === "lasso");
+      if (shape === "lasso" && mode !== "fill" && mode !== "erase") setMode("fill");
+      else {
+        applyNav();
+        syncCursorStyle();
+      }
+    }
+
+    function isLassoDraw() {
+      return shape === "lasso" && (mode === "fill" || mode === "erase");
+    }
+
+    function lassoPaintMode() {
+      return mode === "erase" ? "erase" : "fill";
+    }
+
+    function syncCursorStyle() {
+      if (!viewer || !viewer.canvas) return;
+      viewer.canvas.style.cursor = isLassoDraw() ? "crosshair" : "";
+    }
+
+    function applyNav() {
+      if (!viewer) return;
+      const pan = mode === "pan";
+      viewer.gestureSettingsMouse.dragToPan = pan;
+      viewer.gestureSettingsMouse.flickEnabled = pan;
+      viewer.gestureSettingsMouse.dblClickToZoom = pan || !isLassoDraw();
+      viewer.panHorizontal = true;
+      viewer.panVertical = true;
+    }
+
+    function startAltPan(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+      panDrag = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+      try { viewer.canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+      if (viewer.canvas) viewer.canvas.style.cursor = "grabbing";
+      $("cursor").style.display = "none";
+    }
+
+    function moveAltPan(ev) {
+      if (!panDrag || ev.pointerId !== panDrag.pointerId || !viewer || !viewer.viewport) return;
+      const dx = ev.clientX - panDrag.x;
+      const dy = ev.clientY - panDrag.y;
+      panDrag.x = ev.clientX;
+      panDrag.y = ev.clientY;
+      const delta = viewer.viewport.deltaPointsFromPixels(new OpenSeadragon.Point(-dx, -dy));
+      viewer.viewport.panBy(delta, true);
+    }
+
+    function endAltPan(ev) {
+      if (!panDrag || (ev && ev.pointerId !== panDrag.pointerId && ev.type !== "pointercancel")) return;
+      panDrag = null;
+      syncCursorStyle();
+    }
+
+    function setMaskOn(on) {
+      if (maskOn && !on) lastOpacity = Number($("opacity").value) || lastOpacity;
+      maskOn = on;
+      $("b-mask").classList.toggle("active", maskOn);
+      $("b-mask").textContent = maskOn ? "Mask on" : "Mask off";
+      if (maskOn && Number($("opacity").value) === 0) $("opacity").value = String(lastOpacity);
+      drawMaskLayer();
+    }
+
+    function reloadMask() {
+      lastMaskGen = -1;
+      maskHoldLevel = null;
+      tintCache.clear();
+      drawMaskLayer();
+    }
+
+    let blobRefreshTimer = null;
+    function scheduleBlobRefresh() {
+      if (blobRefreshTimer) clearTimeout(blobRefreshTimer);
+      blobRefreshTimer = setTimeout(() => {
+        brushFlush.then(() => loadBlobs(true)).catch((err) => { $("status").textContent = String(err); });
+      }, 350);
+    }
+
+    function parkMaskLayer() {
+      const stage = $("stage");
+      const layer = $("mask-layer");
+      const draw = $("draw-layer");
+      if (stage && layer && draw && layer.parentElement !== stage) {
+        stage.insertBefore(layer, draw);
+      }
+    }
+
+    function openViewer() {
+      parkMaskLayer();
+      discardQueuedEdits();
+      if (viewer) {
+        viewer.destroy();
+        viewer = null;
+        maskItem = null;
+      }
+      viewer = OpenSeadragon({
+        id: "viewer",
+        prefixUrl: "https://cdn.jsdelivr.net/npm/openseadragon@4.1.1/build/openseadragon/images/",
+        showNavigator: true,
+        navigatorPosition: "BOTTOM_RIGHT",
+        animationTime: 0.2,
+        blendTime: 0.08,
+        immediateRender: true,
+        wrapHorizontal: false,
+        wrapVertical: false,
+        homeFillsViewer: false,
+        maxZoomPixelRatio: 4,
+        minZoomImageRatio: 0.8,
+        imageLoaderLimit: 16,
+        placeholderFillStyle: "#0b0d10",
+        gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true, dragToPan: true, flickEnabled: true, scrollToZoom: true },
+      });
+      viewer.open(rgbSource());
+      viewer.addOnceHandler("open", () => {
+        const layer = $("mask-layer");
+        if (layer && viewer.canvas) viewer.canvas.appendChild(layer);
+        syncViewerSize();
+        viewer.viewport.goHome(true);
+        drawMaskLayer();
+      });
+      applyNav();
+      syncCursorStyle();
+      viewer.canvas.addEventListener("pointerdown", onPointerDown, true);
+      viewer.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
+      viewer.canvas.addEventListener("auxclick", (ev) => {
+        if (ev.button === 1) ev.preventDefault();
+      });
+      viewer.canvas.addEventListener("dblclick", (ev) => {
+        if (!isLassoDraw()) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (lassoBuilding && stroke.length >= 3) finishLasso();
+      }, true);
+      viewer.addHandler("animation", drawOverlay);
+      viewer.addHandler("update-viewport", drawOverlay);
+      viewer.addHandler("animation-finish", () => {
+        maskHoldLevel = idealMaskLevel();
+        drawMaskLayer();
+      });
+      syncViewerSize();
+    }
+
+    function syncViewerSize() {
+      resizeDrawLayer();
+      if (!viewer) return;
+      try {
+        if (viewer.viewport && typeof viewer.viewport.goHome === "function") {
+          viewer.forceRedraw();
+        }
+      } catch (_) {}
+    }
+
+    function brushRadius() { return Number($("radius").value); }
+
+    function screenBrushRadius() {
+      const p1 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0));
+      const p2 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(brushRadius(), 0));
+      return Math.max(3, Math.abs(p2.x - p1.x));
+    }
+
+    function resizeDrawLayer() {
+      const r = $("stage").getBoundingClientRect();
+      const w = Math.max(1, Math.floor(r.width));
+      const h = Math.max(1, Math.floor(r.height));
+      for (const id of ["draw-layer", "mask-layer"]) {
+        const c = $(id);
+        if (!c) continue;
+        if (c.width !== w || c.height !== h) {
+          c.width = w;
+          c.height = h;
+        }
+        c.style.width = `${w}px`;
+        c.style.height = `${h}px`;
+      }
+    }
+
+    function clearPreview() {
+      drawOverlay();
+    }
+
+    function paintPreview() {
+      drawOverlay();
+    }
+
+    function maskTileUrl(level, x, y, gen) {
+      return `/tiles/mask/${level}/${x}/${y}.png?g=${gen == null ? (meta.gen || 0) : gen}`;
+    }
+
+    function idealMaskLevel() {
+      const maxLevel = Math.max(0, meta.max_level || 0);
+      const minLevel = Math.max(0, maxLevel - 8);
+      const zoom = viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom(true));
+      const px = Math.max(zoom, 1e-9) * (window.devicePixelRatio || 1);
+      const level = Math.ceil(maxLevel + Math.log2(px) - 1e-6);
+      return Math.max(minLevel, Math.min(maxLevel, level));
+    }
+
+    function displayMaskLevel() {
+      const ideal = idealMaskLevel();
+      if (maskHoldLevel == null) maskHoldLevel = ideal;
+      if (viewer.viewport.isAnimating && viewer.viewport.isAnimating()) return maskHoldLevel;
+      maskHoldLevel = ideal;
+      return maskHoldLevel;
+    }
+
+    function maskTileRect(level, tx, ty) {
+      const maxLevel = Math.max(0, meta.max_level || 0);
+      const tile = meta.tile || 256;
+      const factor = 2 ** (maxLevel - level);
+      const ix = tx * tile * factor;
+      const iy = ty * tile * factor;
+      return {
+        ix, iy,
+        iw: Math.min(tile * factor, meta.width - ix),
+        ih: Math.min(tile * factor, meta.height - iy),
+      };
+    }
+
+    function requestMaskTile(url) {
+      if (maskImages.has(url) || maskInflight.has(url)) return;
+      maskInflight.add(url);
+      const img = new Image();
+      img.onload = () => {
+        maskInflight.delete(url);
+        maskImages.set(url, img);
+        if (maskImages.size > 384) {
+          const first = maskImages.keys().next().value;
+          maskImages.delete(first);
+        }
+        drawMaskLayer();
+      };
+      img.onerror = () => { maskInflight.delete(url); };
+      img.src = url;
+    }
+
+    function tintedImage(url, img) {
+      const key = `${url}|${maskColor}`;
+      const hit = tintCache.get(key);
+      if (hit) return hit;
+      const tw = img.naturalWidth || img.width;
+      const th = img.naturalHeight || img.height;
+      if (tw < 1 || th < 1) return img;
+      const c = document.createElement("canvas");
+      c.width = tw;
+      c.height = th;
+      const t = c.getContext("2d");
+      t.drawImage(img, 0, 0);
+      t.globalCompositeOperation = "source-in";
+      t.fillStyle = maskColor;
+      t.fillRect(0, 0, tw, th);
+      tintCache.set(key, c);
+      if (tintCache.size > 384) tintCache.delete(tintCache.keys().next().value);
+      return c;
+    }
+
+    function findMaskCover(level, tx, ty) {
+      const minLevel = Math.max(0, (meta.max_level || 0) - 8);
+      const gen = meta.gen || 0;
+      for (let L = level; L >= minLevel; L--) {
+        const shift = level - L;
+        const px = shift ? Math.floor(tx / (2 ** shift)) : tx;
+        const py = shift ? Math.floor(ty / (2 ** shift)) : ty;
+        const url = maskTileUrl(L, px, py, gen);
+        const img = maskImages.get(url);
+        if (img) return { img, url, ...maskTileRect(L, px, py) };
+        if (L === level) requestMaskTile(url);
+      }
+      return null;
+    }
+
+    function setMaskColor(hex) {
+      if (!hex) return;
+      maskColor = hex;
+      try { localStorage.setItem("water-mask-color", hex); } catch (_) {}
+      tintCache.clear();
+      drawMaskLayer();
+    }
+
+    function drawMaskLayer() {
+      const canvas = $("mask-layer");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const alpha = overlayAlpha() / 100;
+      canvas.style.opacity = String(alpha);
+      if (!maskOn || alpha <= 0 || !viewer || !viewer.viewport || !meta.open) return;
+      lastMaskGen = meta.gen || 0;
+      const tile = meta.tile || 256;
+      const maxLevel = Math.max(0, meta.max_level || 0);
+      const level = displayMaskLevel();
+      const factor = 2 ** (maxLevel - level);
+      const bounds = viewer.viewport.viewportToImageRectangle(viewer.viewport.getBounds(true));
+      const x0 = Math.max(0, Math.floor(bounds.x / (tile * factor)));
+      const y0 = Math.max(0, Math.floor(bounds.y / (tile * factor)));
+      const x1 = Math.ceil((bounds.x + bounds.width) / (tile * factor));
+      const y1 = Math.ceil((bounds.y + bounds.height) / (tile * factor));
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.imageSmoothingEnabled = false;
+      const rect = canvas.getBoundingClientRect();
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          const cell = maskTileRect(level, tx, ty);
+          if (cell.ix >= meta.width || cell.iy >= meta.height) continue;
+          const cover = findMaskCover(level, tx, ty);
+          if (!cover) continue;
+          const p1 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(cell.ix, cell.iy));
+          const p2 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(cell.ix + cell.iw, cell.iy + cell.ih));
+          const dx0 = Math.floor(p1.x - rect.left);
+          const dy0 = Math.floor(p1.y - rect.top);
+          const dx1 = Math.ceil(p2.x - rect.left);
+          const dy1 = Math.ceil(p2.y - rect.top);
+          const src = tintedImage(cover.url, cover.img);
+          const swImg = src.width || src.naturalWidth;
+          const shImg = src.height || src.naturalHeight;
+          const sx = (cell.ix - cover.ix) / cover.iw * swImg;
+          const sy = (cell.iy - cover.iy) / cover.ih * shImg;
+          const sw = cell.iw / cover.iw * swImg;
+          const sh = cell.ih / cover.ih * shImg;
+          ctx.drawImage(
+            src, sx, sy, Math.max(0.5, sw), Math.max(0.5, sh),
+            dx0, dy0, Math.max(1, dx1 - dx0), Math.max(1, dy1 - dy0)
+          );
+        }
+      }
+      drawLocalStrokes(ctx, rect);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      const ideal = idealMaskLevel();
+      if (ideal !== level && !viewer.viewport.isAnimating()) {
+        const ifactor = 2 ** (maxLevel - ideal);
+        const ix0 = Math.max(0, Math.floor(bounds.x / (tile * ifactor)));
+        const iy0 = Math.max(0, Math.floor(bounds.y / (tile * ifactor)));
+        const ix1 = Math.ceil((bounds.x + bounds.width) / (tile * ifactor));
+        const iy1 = Math.ceil((bounds.y + bounds.height) / (tile * ifactor));
+        for (let ty = iy0; ty <= iy1; ty++) {
+          for (let tx = ix0; tx <= ix1; tx++) requestMaskTile(maskTileUrl(ideal, tx, ty));
+        }
+      }
+    }
+
+    function imageRadiusToScreen(r) {
+      const p1 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0));
+      const p2 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(r, 0));
+      return Math.max(1, Math.abs(p2.x - p1.x));
+    }
+
+    function simplifyPts(pts) {
+      if (pts.length <= 120) return pts;
+      const step = Math.ceil(pts.length / 120);
+      const out = [];
+      for (let i = 0; i < pts.length; i += step) out.push(pts[i]);
+      if (out[out.length - 1] !== pts[pts.length - 1]) out.push(pts[pts.length - 1]);
+      return out;
+    }
+
+    function simplifyLasso(pts) {
+      if (pts.length <= 3) return pts;
+      const out = [pts[0]];
+      for (let i = 1; i < pts.length; i++) {
+        const a = out[out.length - 1];
+        const b = pts[i];
+        if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) >= 1) out.push(b);
+      }
+      if (out.length > 8000) {
+        const step = Math.ceil(out.length / 8000);
+        const sparse = [];
+        for (let i = 0; i < out.length; i += step) sparse.push(out[i]);
+        if (sparse[sparse.length - 1] !== out[out.length - 1]) sparse.push(out[out.length - 1]);
+        return sparse;
+      }
+      return out;
+    }
+
+    function pathLength(pts) {
+      let d = 0;
+      for (let i = 1; i < pts.length; i++) {
+        d += Math.abs(pts[i].x - pts[i - 1].x) + Math.abs(pts[i].y - pts[i - 1].y);
+      }
+      return d;
+    }
+
+    function screenDist(a, b) {
+      const p1 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(a.x + 0.5, a.y + 0.5));
+      const p2 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(b.x + 0.5, b.y + 0.5));
+      const dx = p1.x - p2.x;
+      const dy = p1.y - p2.y;
+      return Math.hypot(dx, dy);
+    }
+
+    function lassoPreviewPts() {
+      const pts = stroke.slice();
+      if (lassoHover && (!pts.length || pts[pts.length - 1].x !== lassoHover.x || pts[pts.length - 1].y !== lassoHover.y)) {
+        pts.push(lassoHover);
+      }
+      return pts;
+    }
+
+    function toScreenPath(ctx, rect, points, close) {
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i++) {
+        const p = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(points[i].x + 0.5, points[i].y + 0.5));
+        const x = p.x - rect.left;
+        const y = p.y - rect.top;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      if (close && points.length > 2) ctx.closePath();
+    }
+
+    function fillLasso(ctx, rect, points, paintMode) {
+      if (!points || points.length < 3) return;
+      ctx.globalCompositeOperation = paintMode === "erase" ? "destination-out" : "source-over";
+      ctx.fillStyle = paintMode === "erase" ? "#000" : maskColor;
+      ctx.globalAlpha = 1;
+      toScreenPath(ctx, rect, points, true);
+      ctx.fill();
+    }
+
+    function strokePoints(ctx, rect, points, radius, mode) {
+      if (!points || !points.length) return;
+      ctx.globalCompositeOperation = mode === "erase" ? "destination-out" : "source-over";
+      ctx.strokeStyle = mode === "erase" ? "#000" : maskColor;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = imageRadiusToScreen(radius) * 2;
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i++) {
+        const p = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(points[i].x + 0.5, points[i].y + 0.5));
+        const x = p.x - rect.left;
+        const y = p.y - rect.top;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    function drawLocalStrokes(ctx, rect) {
+      if (!viewer) return;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (const s of localStrokes) {
+        if (s.kind === "lasso") fillLasso(ctx, rect, s.points, s.mode);
+        else strokePoints(ctx, rect, s.points, s.radius, s.mode);
+      }
+      if ((drawing || lassoBuilding) && stroke.length && isLassoDraw()) {
+        fillLasso(ctx, rect, lassoPreviewPts(), lassoPaintMode());
+      } else if (drawing && stroke.length && !isLassoDraw()) {
+        strokePoints(ctx, rect, stroke, brushRadius(), mode);
+      }
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+    }
+
+    function queueBrush(pts, radius, mode) {
+      const points = simplifyPts(pts);
+      localStrokes.push({ kind: "brush", points, radius, mode });
+      meta.dirty = true;
+      const epoch = editEpoch;
+      brushFlush = brushFlush.then(() => {
+        if (epoch !== editEpoch) return;
+        return api("/api/brush", { points, radius, mode }).catch((err) => {
+          $("status").textContent = String(err);
+        });
+      });
+      drawMaskLayer();
+      scheduleBlobRefresh();
+    }
+
+    function queueLasso(pts, paintMode) {
+      const points = simplifyLasso(pts);
+      if (points.length < 3) return;
+      localStrokes.push({ kind: "lasso", points, mode: paintMode });
+      meta.dirty = true;
+      const epoch = editEpoch;
+      brushFlush = brushFlush.then(() => {
+        if (epoch !== editEpoch) return;
+        return api("/api/lasso", { points, mode: paintMode }).catch((err) => {
+          $("status").textContent = String(err);
+        });
+      });
+      drawMaskLayer();
+      scheduleBlobRefresh();
+    }
+
+    function cancelLasso() {
+      drawing = false;
+      lassoBuilding = false;
+      lassoHover = null;
+      stroke = [];
+      drawPointer = null;
+      setStatus();
+      drawOverlay();
+    }
+
+    function finishLasso() {
+      const pts = simplifyLasso(stroke);
+      const paintMode = lassoPaintMode();
+      drawing = false;
+      lassoBuilding = false;
+      lassoHover = null;
+      stroke = [];
+      drawPointer = null;
+      if (pts.length >= 3) queueLasso(pts, paintMode);
+      else setStatus();
+      drawOverlay();
+    }
+
+    async function flushEdits() {
+      await brushFlush;
+    }
+
+    function discardQueuedEdits() {
+      editEpoch += 1;
+      localStrokes = [];
+      brushFlush = Promise.resolve();
+      lassoBuilding = false;
+      lassoHover = null;
+      stroke = [];
+      drawing = false;
+    }
+
+    function drawOverlay() {
+      drawMaskLayer();
+      const c = $("draw-layer");
+      if (!c || !viewer || !viewer.viewport) return;
+      const ctx = c.getContext("2d");
+      ctx.clearRect(0, 0, c.width, c.height);
+      let rect;
+      try {
+        rect = c.getBoundingClientRect();
+        const b = focusKind === "hole" ? holes[holeIndex] : blobs[blobIndex];
+        if (b && !drawing && !lassoBuilding) {
+          const p1 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(b.x, b.y));
+          const p2 = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(b.x + b.w, b.y + b.h));
+          ctx.strokeStyle = b.kept ? "#5bd08a" : (focusKind === "hole" ? "#ffb020" : "#ffe066");
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.strokeRect(p1.x - rect.left, p1.y - rect.top, p2.x - p1.x, p2.y - p1.y);
+          ctx.setLineDash([]);
+        }
+        const lassoPts = (drawing || lassoBuilding) && isLassoDraw() ? lassoPreviewPts() : [];
+        if (lassoPts.length) {
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.setLineDash([7, 5]);
+          ctx.strokeStyle = lassoPaintMode() === "erase" ? "rgba(255,80,80,0.95)" : "rgba(255,255,255,0.95)";
+          ctx.lineWidth = 2;
+          toScreenPath(ctx, rect, lassoPts, lassoPts.length > 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const start = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(lassoPts[0].x + 0.5, lassoPts[0].y + 0.5));
+          ctx.fillStyle = lassoPaintMode() === "erase" ? "#ff5050" : "#ffffff";
+          ctx.beginPath();
+          ctx.arc(start.x - rect.left, start.y - rect.top, 5, 0, Math.PI * 2);
+          ctx.fill();
+          return;
+        }
+        if (!drawing || stroke.length === 0 || mode !== "erase") return;
+        const r = screenBrushRadius();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "rgba(255,80,80,0.9)";
+        ctx.lineWidth = r * 2;
+        ctx.beginPath();
+        for (let i = 0; i < stroke.length; i++) {
+          const p = viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(stroke[i].x + 0.5, stroke[i].y + 0.5));
+          const x = p.x - rect.left;
+          const y = p.y - rect.top;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      } catch (_) {}
+    }
+
+    function updateCursor(ev) {
+      if (mode === "pan" || mode === "delete" || isLassoDraw()) {
+        $("cursor").style.display = "none";
+        return;
+      }
+      const r = screenBrushRadius();
+      const c = $("cursor");
+      c.style.display = "block";
+      c.style.width = `${r * 2}px`;
+      c.style.height = `${r * 2}px`;
+      c.style.left = `${ev.clientX - r}px`;
+      c.style.top = `${ev.clientY - r}px`;
+    }
+
+    function onPointerDown(ev) {
+      if (!viewer) return;
+      if (ev.button === 1 || ev.button === 2) {
+        startAltPan(ev);
+        return;
+      }
+      if (mode === "pan" || ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+      drawPointer = ev.pointerId;
+      try { viewer.canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+      const pt = clientToImage(ev);
+      if (mode === "delete") {
+        const from = blobIndex;
+        const marked = blobs[blobIndex];
+        const hitMarked = marked && pt.x >= marked.x && pt.x < marked.x + marked.w && pt.y >= marked.y && pt.y < marked.y + marked.h;
+        flushEdits().then(() => api("/api/delete", pt)).then(async (s) => {
+          meta = s; setStatus();
+          if (!s.ok) {
+            $("status").textContent = s.reason || "Delete missed (click water)";
+            return;
+          }
+          localStrokes = [];
+          if (hitMarked) await refreshAndJumpToNext(from);
+          else { reloadMask(); scheduleBlobRefresh(); }
+        }).catch((err) => { $("status").textContent = String(err); });
+        drawPointer = null;
+        return;
+      }
+      if (isLassoDraw() && lassoBuilding && stroke.length >= 3 && screenDist(stroke[0], pt) <= 14) {
+        finishLasso();
+        return;
+      }
+      drawing = true;
+      if (isLassoDraw() && lassoBuilding) stroke.push(pt);
+      else stroke = [pt];
+      lassoHover = null;
+      resizeDrawLayer();
+      paintPreview();
+      updateCursor(ev);
+    }
+
+    function onPointerMove(ev) {
+      if (panDrag) {
+        moveAltPan(ev);
+        return;
+      }
+      if ((mode === "fill" || mode === "erase") && !isLassoDraw()) updateCursor(ev);
+      if (isLassoDraw() && lassoBuilding && !drawing) {
+        lassoHover = clientToImage(ev);
+        paintPreview();
+        return;
+      }
+      if (!drawing || ev.pointerId !== drawPointer) return;
+      ev.preventDefault();
+      stroke.push(clientToImage(ev));
+      paintPreview();
+    }
+
+    async function onPointerUp(ev) {
+      if (panDrag) {
+        endAltPan(ev);
+        return;
+      }
+      if (drawPointer !== null && ev.pointerId !== drawPointer && ev.type !== "pointercancel") return;
+      if (!drawing) {
+        drawPointer = null;
+        return;
+      }
+      drawing = false;
+      drawPointer = null;
+      const pts = stroke;
+      if (isLassoDraw()) {
+        if (lassoBuilding || pathLength(pts) < 16) {
+          lassoBuilding = true;
+          lassoHover = null;
+          $("status").textContent = "Lasso: click vertices, drag to trace, Enter or double-click to close, Esc to cancel.";
+          paintPreview();
+          return;
+        }
+        finishLasso();
+        return;
+      }
+      stroke = [];
+      if (pts.length) queueBrush(pts, brushRadius(), mode);
+      clearPreview();
+    }
+
+    function showMap() {
+      $("map-overlay").classList.remove("hidden");
+      drawMapGrid();
+    }
+
+    function hideMap() {
+      $("map-overlay").classList.add("hidden");
+    }
+
+    function cellAt(px, py) {
+      if (!overview || !overview.cells) return null;
+      return overview.cells.find((c) => px >= c.x && px < c.x + c.w && py >= c.y && py < c.y + c.h) || null;
+    }
+
+    function overviewPoint(ev) {
+      const img = $("map-img");
+      const rect = img.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return null;
+      const x = (ev.clientX - rect.left) * (img.naturalWidth / rect.width);
+      const y = (ev.clientY - rect.top) * (img.naturalHeight / rect.height);
+      return { x, y };
+    }
+
+    function cellSelectable(c) {
+      return nhood === 1 || !!(c && c.selectable);
+    }
+
+    function setNhood(next) {
+      nhood = next === 1 ? 1 : 9;
+      $("b-nhood-1").classList.toggle("active", nhood === 1);
+      $("b-nhood-9").classList.toggle("active", nhood === 9);
+      $("map-title").textContent = nhood === 1
+        ? "Click any tile to edit just that tile."
+        : "Click an interior tile to edit it together with the 8 tiles around it.";
+      $("map-hint").textContent = nhood === 1
+        ? "1 tile is lighter on RAM. Cyan = water mask already exists."
+        : "Edge tiles are disabled (no full 3×3). Cyan = water mask already exists. First visit builds this low-res mosaic.";
+      drawMapGrid();
+    }
+
+    function drawMapGrid() {
+      const canvas = $("map-grid");
+      const img = $("map-img");
+      if (!overview || !img.naturalWidth) return;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const block = new Set(overview.block || []);
+      for (const c of overview.cells) {
+        if (nhood === 9 && !c.selectable) {
+          ctx.fillStyle = "rgba(0,0,0,0.42)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+        }
+        if (block.has(c.stem)) {
+          ctx.fillStyle = "rgba(91,208,138,0.22)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+        }
+        ctx.strokeStyle = "rgba(232,237,244,0.35)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
+      }
+      if (hoverCell && cellSelectable(hoverCell)) {
+        for (const c of overview.cells) {
+          const hit = nhood === 1
+            ? c.stem === hoverCell.stem
+            : Math.abs(c.ri - hoverCell.ri) <= 1 && Math.abs(c.ci - hoverCell.ci) <= 1;
+          if (!hit) continue;
+          ctx.fillStyle = "rgba(61,187,255,0.28)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+          ctx.strokeStyle = "#3dbbff";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
+        }
+      } else if (hoverCell) {
+        ctx.fillStyle = "rgba(255,80,80,0.2)";
+        ctx.fillRect(hoverCell.x, hoverCell.y, hoverCell.w, hoverCell.h);
+      }
+    }
+
+    async function loadOverview() {
+      $("map-hint").textContent = "Building map overview (first time can take a couple of minutes)…";
+      $("status").textContent = "Building map overview (first time can take a couple of minutes)…";
+      overview = await api("/api/overview");
+      $("map-img").src = "/overview.jpg?t=" + Date.now();
+      await new Promise((resolve, reject) => {
+        $("map-img").onload = resolve;
+        $("map-img").onerror = () => reject(new Error("overview image failed"));
+      });
+      drawMapGrid();
+      setNhood(nhood);
+    }
+
+    async function readNdjson(res, onEvent) {
+      if (!res.body) throw new Error("no response body");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) onEvent(JSON.parse(line));
+        }
+      }
+      if (buf.trim()) onEvent(JSON.parse(buf.trim()));
+    }
+
+    function showLoadPanel(center, tiles) {
+      $("load-overlay").classList.remove("hidden");
+      const n = (tiles && tiles.length) || nhood;
+      $("load-title").textContent = n === 1 ? `Loading ${center}` : `Loading 3×3 around ${center}`;
+      $("load-sub").textContent = n === 1
+        ? "Reading ortho and water mask into RAM…"
+        : "Reading 9 orthos and water masks into RAM…";
+      $("load-bar-fill").style.width = "0%";
+      $("load-pct").textContent = `0 / ${n}`;
+      const ul = $("load-steps");
+      ul.innerHTML = "";
+      (tiles || []).forEach((t, i) => {
+        const li = document.createElement("li");
+        li.id = `load-step-${i}`;
+        li.innerHTML = `<span class="mark">·</span><span class="role">${t.role || ""}</span><span class="name">${t.stem}</span><span class="detail">waiting</span>`;
+        ul.appendChild(li);
+      });
+    }
+
+    function hideLoadPanel() {
+      $("load-overlay").classList.add("hidden");
+    }
+
+    function setLoadStep(i, cls, detail) {
+      const li = $(`load-step-${i}`);
+      if (!li) return;
+      li.className = cls;
+      const mark = li.querySelector(".mark");
+      if (mark) mark.textContent = cls === "done" ? "✓" : cls === "active" ? "→" : "·";
+      const d = li.querySelector(".detail");
+      if (d) d.textContent = detail;
+      li.scrollIntoView({ block: "nearest" });
+    }
+
+    async function openBlock(stem) {
+      const label = nhood === 1 ? stem : `3×3 around ${stem}`;
+      if (meta.dirty && !confirm(`Unsaved edits on the current tiles. Load ${label} anyway?`)) return;
+      $("status").textContent = `Loading ${label}…`;
+      showLoadPanel(stem, []);
+      let stats = null;
+      try {
+        const res = await fetch("/api/open-block", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stem, neighborhood: nhood }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        let failed = null;
+        await readNdjson(res, (ev) => {
+          if (ev.message) {
+            $("status").textContent = ev.message;
+            $("load-sub").textContent = ev.message;
+          }
+          if (ev.event === "start") {
+            showLoadPanel(ev.center, ev.tiles);
+          }
+          if (ev.event === "tile") {
+            const idx = (ev.i || 1) - 1;
+            const total = ev.total || 9;
+            const pct = ev.phase === "done" ? (ev.i / total) * 100 : ((ev.i - 1) / total) * 100 + 6;
+            $("load-bar-fill").style.width = `${Math.min(100, pct)}%`;
+            $("load-pct").textContent = `${ev.phase === "done" ? ev.i : Math.max(0, ev.i - 1)} / ${total}`;
+            if (ev.phase === "ortho") setLoadStep(idx, "active", "reading ortho…");
+            else if (ev.phase === "mask") setLoadStep(idx, "active", ev.has_mask ? "reading water mask…" : "no mask (empty)");
+            else if (ev.phase === "done") {
+              $("load-pct").textContent = `${ev.i} / ${total}`;
+              const extra = ev.has_mask ? "" : " · no mask";
+              setLoadStep(idx, "done", `${ev.elapsed_s}s${extra}`);
+            }
+          }
+          if (ev.event === "mosaic") {
+            $("load-bar-fill").style.width = "100%";
+            $("load-sub").textContent = ev.message;
+          }
+          if (ev.event === "ready") stats = ev.stats;
+          if (ev.event === "error") failed = ev.message || "load failed";
+        });
+        if (failed) throw new Error(failed);
+      } catch (err) {
+        hideLoadPanel();
+        showMap();
+        $("status").textContent = String(err);
+        return;
+      }
+      if (!stats || !stats.open) {
+        hideLoadPanel();
+        showMap();
+        $("status").textContent = "Load did not finish.";
+        return;
+      }
+      meta = stats;
+      $("load-sub").textContent = "Indexing water blobs and holes…";
+      $("status").textContent = "Indexing water blobs and holes…";
+      hideMap();
+      openViewer();
+      await loadBlobs(false);
+      hideLoadPanel();
+      if (overview) {
+        overview.current = stem;
+        overview.block = meta.block || [];
+      }
+      setStatus();
+    }
+
+    async function boot() {
+      loadMaskColor();
+      await loadOverview();
+      meta = await api("/api/meta");
+      setStatus();
+      if (meta.open) {
+        hideMap();
+        openViewer();
+        await loadBlobs(false);
+      } else {
+        showMap();
+      }
+    }
+
+    $("b-map").addEventListener("click", () => showMap());
+    $("b-nhood-1").addEventListener("click", () => setNhood(1));
+    $("b-nhood-9").addEventListener("click", () => setNhood(9));
+    $("map-grid").addEventListener("mousemove", (ev) => {
+      const pt = overviewPoint(ev);
+      hoverCell = pt ? cellAt(pt.x, pt.y) : null;
+      $("map-grid").style.cursor = hoverCell && cellSelectable(hoverCell) ? "pointer" : "not-allowed";
+      if (hoverCell) {
+        $("map-hint").textContent = cellSelectable(hoverCell)
+          ? (nhood === 1 ? hoverCell.stem : `3×3 around ${hoverCell.stem}`)
+          : `${hoverCell.stem} is on the map edge (no full 8 neighbors)`;
+      }
+      drawMapGrid();
+    });
+    $("map-grid").addEventListener("mouseleave", () => {
+      hoverCell = null;
+      drawMapGrid();
+    });
+    $("map-grid").addEventListener("click", (ev) => {
+      const pt = overviewPoint(ev);
+      const cell = pt ? cellAt(pt.x, pt.y) : null;
+      if (!cell) return;
+      if (!cellSelectable(cell)) return;
+      openBlock(cell.stem).catch((err) => { $("status").textContent = String(err); });
+    });
+    for (const id of ["b-pan", "b-del", "b-fill", "b-erase"]) {
+      $(id).addEventListener("click", () => setMode($(id).dataset.mode));
+    }
+    $("b-lasso").addEventListener("click", () => setShape(shape === "lasso" ? "brush" : "lasso"));
+    $("radius").addEventListener("input", () => { $("radius-v").textContent = $("radius").value; });
+    $("b-mask").addEventListener("click", () => setMaskOn(!maskOn));
+    $("mask-color").addEventListener("input", () => setMaskColor($("mask-color").value));
+    $("opacity").addEventListener("input", () => {
+      const v = Number($("opacity").value);
+      if (v > 0) {
+        lastOpacity = v;
+        if (!maskOn) {
+          maskOn = true;
+          $("b-mask").classList.toggle("active", true);
+          $("b-mask").textContent = "Mask on";
+        }
+        drawMaskLayer();
+      } else {
+        setMaskOn(false);
+      }
+    });
+    $("b-prev").addEventListener("click", () => stepBlob(-1));
+    $("b-next").addEventListener("click", () => stepBlob(1));
+    $("b-prev2").addEventListener("click", () => stepBlob(-1));
+    $("b-next2").addEventListener("click", () => stepBlob(1));
+    $("b-hole-prev").addEventListener("click", () => stepHole(-1));
+    $("b-hole-next").addEventListener("click", () => stepHole(1));
+    $("b-hole-prev2").addEventListener("click", () => stepHole(-1));
+    $("b-hole-next2").addEventListener("click", () => stepHole(1));
+    $("b-fill-hole").addEventListener("click", () => fillCurrentHole());
+    $("b-keep").addEventListener("click", () => toggleCurrentKept());
+    $("b-prune").addEventListener("click", async () => {
+      const minPx = Math.max(1, parseInt($("min-blob-px").value, 10) || 1);
+      const nKept = blobs.filter((b) => b.kept).length;
+      const extra = nKept ? ` ${nKept} marked correct will be kept.` : "";
+      if (!confirm(`Remove water blobs smaller than ${minPx} px?${extra} Undo with Z.`)) return;
+      $("status").textContent = "Removing small blobs…";
+      await flushEdits();
+      const s = await api("/api/prune-blobs", { min_px: minPx });
+      meta = s;
+      setStatus();
+      if (s.ok) {
+        localStrokes = [];
+        reloadMask();
+        await loadBlobs(true);
+        const prot = s.protected ? `  ·  kept ${s.protected} marked correct` : "";
+        $("status").textContent += `  ·  removed ${s.removed} small blobs${prot}`;
+      }
+    });
+    $("b-prune-holes").addEventListener("click", async () => {
+      const minPx = Math.max(1, parseInt($("min-blob-px").value, 10) || 1);
+      const nKept = holes.filter((b) => b.kept).length;
+      const extra = nKept ? ` ${nKept} marked correct will be kept.` : "";
+      if (!confirm(`Fill holes smaller than ${minPx} px?${extra} Undo with Z.`)) return;
+      $("status").textContent = "Filling small holes…";
+      await flushEdits();
+      const s = await api("/api/prune-holes", { min_px: minPx });
+      meta = s;
+      setStatus();
+      if (s.ok) {
+        localStrokes = [];
+        reloadMask();
+        await loadBlobs(true);
+        const prot = s.protected ? `  ·  kept ${s.protected} marked correct` : "";
+        $("status").textContent += `  ·  filled ${s.filled} small holes${prot}`;
+      }
+    });
+    $("b-undo").addEventListener("click", async () => {
+      await flushEdits();
+      meta = await api("/api/undo", {});
+      setStatus();
+      if (localStrokes.length) {
+        localStrokes.pop();
+        drawMaskLayer();
+      } else {
+        reloadMask();
+        scheduleBlobRefresh();
+      }
+    });
+    $("b-reset").addEventListener("click", async () => {
+      if (!confirm("Reset these tiles to the original OEM water masks?")) return;
+      discardQueuedEdits();
+      meta = await api("/api/reset", {});
+      setStatus();
+      reloadMask();
+      await loadBlobs(false);
+    });
+    $("b-save").addEventListener("click", async () => {
+      $("status").textContent = "Saving…";
+      await flushEdits();
+      const out = await api("/api/save", {});
+      meta = await api("/api/meta");
+      setStatus();
+      $("status").textContent += `  ·  wrote ${out.n_water} polygons`;
+      if (out.map_shp) $("status").textContent += `  ·  map ${String(out.map_shp).split(/[/\\]/).pop()}`;
+    });
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !$("load-overlay").classList.contains("hidden")) return;
+      if (ev.key === "Escape" && (drawing || lassoBuilding) && isLassoDraw()) {
+        ev.preventDefault();
+        cancelLasso();
+        return;
+      }
+      if (ev.key === "Escape" && !$("map-overlay").classList.contains("hidden") && meta.open) {
+        hideMap();
+        return;
+      }
+      if (!$("map-overlay").classList.contains("hidden")) return;
+      if (ev.target.matches("input, select, textarea")) return;
+      const k = ev.key.toLowerCase();
+      if ((k === "enter") && lassoBuilding && isLassoDraw()) {
+        ev.preventDefault();
+        finishLasso();
+        return;
+      }
+      if (k === "v") setMode("pan");
+      if (k === "d") setMode("delete");
+      if (k === "b") setMode("fill");
+      if (k === "e") setMode("erase");
+      if (k === "l") { ev.preventDefault(); setShape(shape === "lasso" ? "brush" : "lasso"); }
+      if (k === "m") setMaskOn(!maskOn);
+      if (k === "," || k === "<" || k === "arrowleft") { ev.preventDefault(); stepBlob(-1); }
+      if (k === "." || k === ">" || k === "arrowright") { ev.preventDefault(); stepBlob(1); }
+      if (k === "[" ) { ev.preventDefault(); stepHole(-1); }
+      if (k === "]" ) { ev.preventDefault(); stepHole(1); }
+      if (k === "f") { ev.preventDefault(); fillCurrentHole(); }
+      if (k === "k") { ev.preventDefault(); toggleCurrentKept(); }
+      if (k === "x" || k === "delete") { ev.preventDefault(); deleteCurrentBlob(); }
+      if (k === "z") { ev.preventDefault(); $("b-undo").click(); }
+      if (k === "s" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); $("b-save").click(); }
+    });
+    $("stage").addEventListener("pointerleave", () => {
+      if (!drawing) $("cursor").style.display = "none";
+    });
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("resize", syncViewerSize);
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => syncViewerSize()).observe($("stage"));
+    }
+    boot().catch((err) => { $("status").textContent = String(err); });
+  </script>
+</body>
+</html>

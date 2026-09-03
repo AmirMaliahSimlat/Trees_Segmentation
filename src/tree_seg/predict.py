@@ -46,6 +46,7 @@ def predict_geotiff(
     train_gsd_m: float = 0.10,
     native_gsd_m: float | None = None,
     stem: str | None = None,
+    write_proba: bool = True,
 ) -> dict[str, Path]:
     """
     Run tiled inference and write probability + binary mask GeoTIFFs.
@@ -92,12 +93,17 @@ def predict_geotiff(
         proba = (proba_acc / weight_acc).astype(np.float32)
         mask = (proba >= threshold).astype(np.uint8)
 
-        proba_path = output_dir / f"{stem}_tree_proba.tif"
+        paths: dict[str, Path] = {}
         mask_path = output_dir / f"{stem}_tree_mask.tif"
-        write_geotiff(proba_path, proba, transform, crs, nodata=None, dtype="float32")
         write_geotiff(mask_path, mask, transform, crs, nodata=0, dtype="uint8")
+        paths["mask"] = mask_path
 
-    return {"proba": proba_path, "mask": mask_path}
+        if write_proba:
+            proba_path = output_dir / f"{stem}_tree_proba.tif"
+            write_geotiff(proba_path, proba, transform, crs, nodata=None, dtype="float32")
+            paths["proba"] = proba_path
+
+    return paths
 
 
 def predict_from_config(
@@ -117,4 +123,5 @@ def predict_from_config(
         match_train_gsd=bool(p.get("match_train_gsd", False)),
         train_gsd_m=float(p.get("train_gsd_m", 0.10)),
         native_gsd_m=p.get("native_gsd_m"),
+        write_proba=bool(p.get("write_proba", True)),
     )

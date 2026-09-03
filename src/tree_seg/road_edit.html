@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Road map editor</title>
+  <script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.1/build/openseadragon/openseadragon.min.js"></script>
+  <style>
+    :root {
+      --bg: #12151a; --panel: #1b2028; --line: #2c3440; --text: #e8edf4;
+      --muted: #8b97a8; --accent: #3dbbff; --danger: #ff6b6b; --ok: #5bd08a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.4 Segoe UI, system-ui, sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    #bar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      padding: 8px 10px; background: var(--panel); border-bottom: 1px solid var(--line); flex: 0 0 auto;
+    }
+    #bar label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    select, button, input[type="range"], input[type="number"] { font: inherit; }
+    input[type="number"] {
+      width: 4.8em; background: #252c36; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 8px;
+    }
+    select, button {
+      background: #252c36; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 10px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.active { background: #0f3a52; border-color: var(--accent); color: var(--accent); }
+    button.save { background: #163524; border-color: #2e6b46; }
+    button.danger { border-color: #5a2a2a; }
+    #work { display: flex; flex: 1 1 0; min-height: 0; overflow: hidden; }
+    #stage { flex: 1 1 0; min-width: 0; min-height: 0; position: relative; background: #0b0d10; }
+    #viewer { position: absolute; inset: 0; width: 100%; height: 100%; background: #0b0d10; touch-action: none; }
+    #road-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+    #side {
+      width: 240px; flex: 0 0 240px; background: var(--panel); border-left: 1px solid var(--line);
+      padding: 10px; overflow: auto; color: var(--muted);
+    }
+    #side h3 { margin: 0 0 8px; color: var(--text); font-size: 13px; }
+    #side .kv { margin: 4px 0; }
+    #status { color: var(--muted); padding: 6px 10px; border-top: 1px solid var(--line); flex: 0 0 auto; }
+    kbd { background: #252c36; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--text); }
+    #current-tile { color: var(--accent); min-width: 12em; }
+    #map-overlay {
+      position: fixed; inset: 0; z-index: 30; background: rgba(8, 10, 14, 0.94);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px;
+    }
+    #map-overlay.hidden { display: none; }
+    #map-nhood { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+    #map-nhood span, #map-hint { color: var(--muted); }
+    #map-stage { position: relative; display: inline-block; line-height: 0; max-width: 96vw; }
+    #map-img { display: block; max-width: 96vw; max-height: calc(96vh - 70px); image-rendering: pixelated; }
+    #map-grid { position: absolute; left: 0; top: 0; width: 100%; height: 100%; cursor: pointer; }
+    #load-overlay {
+      position: fixed; inset: 0; z-index: 40; background: rgba(8, 10, 14, 0.82);
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    #load-overlay.hidden { display: none; }
+    #load-card {
+      width: min(560px, 94vw); background: var(--panel); border: 1px solid var(--line);
+      border-radius: 10px; padding: 16px 18px;
+    }
+    #load-bar { height: 7px; background: #252c36; border-radius: 4px; overflow: hidden; margin: 10px 0 4px; }
+    #load-bar-fill { height: 100%; width: 0; background: var(--accent); }
+    #load-steps { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+    #load-steps li {
+      display: grid; grid-template-columns: 1.4em 4.5em 1fr auto; gap: 8px;
+      padding: 5px 0; border-bottom: 1px solid var(--line); color: var(--muted);
+    }
+    #load-steps li.active { color: var(--accent); }
+    #load-steps li.done { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="bar">
+      <button id="b-map">Map</button>
+      <span id="current-tile">no tiles loaded</span>
+      <label>Source
+        <select id="source">
+          <option value="osm">OSM</option>
+          <option value="tiger">TIGER</option>
+          <option value="both">OSM + TIGER</option>
+        </select>
+      </label>
+      <button id="b-pan" class="active" data-mode="pan">Pan</button>
+      <button id="b-del" data-mode="delete" title="Click a line to delete it (D)">Delete</button>
+      <button id="b-vertex" data-mode="vertex" title="Edit vertices. Hold Left Shift to draw or stretch. Delete removes selected vertices (R)">Vertex</button>
+      <button id="b-roads" class="active">Lines on</button>
+      <label>Min m <input id="min-m" type="number" min="1" step="1" value="12" /></label>
+      <button id="b-drop" title="Delete lines shorter than min m">Drop short</button>
+      <label>Join m <input id="join-m" type="number" min="1" step="1" value="8" /></label>
+      <button id="b-join" title="Join dangling ends within Join m">Join ends</button>
+      <button id="b-undo">Undo</button>
+      <button id="b-reset" class="danger">Reset</button>
+      <button id="b-save" class="save">Save shapefile</button>
+    </div>
+    <div id="work">
+      <div id="stage">
+        <div id="viewer"></div>
+        <canvas id="road-layer"></canvas>
+      </div>
+      <aside id="side">
+        <h3>Selected</h3>
+        <div id="sel-box">Click a line.</div>
+        <p style="margin-top:16px">
+          <kbd>V</kbd> pan <kbd>D</kbd> delete line <kbd>R</kbd> vertex<br>
+          Vertex: drag empty to box-select vertices, then drag them together or press Delete. Ctrl+drag adds to the selection.<br>
+          Click a segment to add a point. Yellow squares are shared junctions (same source only).<br>
+          Hold Left Shift: click empty to draw a new line, or click a road to stretch a spur. Extra clicks pin points. Release Shift to finish.<br>
+          Drop short / Join ends are instant (they only change the overlay).<br>
+          Right-drag pans in any tool.
+        </p>
+      </aside>
+    </div>
+    <div id="status">Pick a tile on the map.</div>
+  </div>
+  <div id="map-overlay">
+    <div>
+      <div id="map-title">Choose 1 tile or a 3×3 block, then click a tile.</div>
+      <div id="map-nhood">
+        <span>Load</span>
+        <button id="b-nhood-1" type="button">1 tile</button>
+        <button id="b-nhood-9" type="button" class="active">3×3 tiles</button>
+      </div>
+      <div id="map-stage">
+        <img id="map-img" alt="overview" />
+        <canvas id="map-grid"></canvas>
+      </div>
+      <div id="map-hint">Cyan tint = already saved an edit. Edge tiles are disabled for 3×3.</div>
+    </div>
+  </div>
+  <div id="load-overlay" class="hidden">
+    <div id="load-card">
+      <div id="load-title">Loading</div>
+      <div id="load-sub"></div>
+      <div id="load-bar"><div id="load-bar-fill"></div></div>
+      <div id="load-pct">0 / 9</div>
+      <ul id="load-steps"></ul>
+    </div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let viewer = null;
+    let meta = { open: false };
+    let mode = "pan";
+    let roads = [];
+    let roadsOrig = [];
+    let undoStack = [];
+    let nextId = 1;
+    let selected = null;
+    let draft = [];
+    let stretchFrom = null;
+    let ghost = null;
+    let roadsOn = true;
+    let overview = null;
+    let hoverCell = null;
+    let nhood = 9;
+    let panDrag = null;
+    let vertexDrag = null;
+    let groupDrag = null;
+    let boxDrag = null;
+    let selVerts = new Set();
+    let hoverPt = null;
+    let opening = false;
+    let leftShift = false;
+    const SHARE_M = 2.4;
+
+    async function api(path, body) {
+      const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+      const res = await fetch(path, opt);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function lengthPx(coords) {
+      let s = 0;
+      for (let i = 1; i < coords.length; i++) {
+        s += Math.hypot(coords[i][0] - coords[i - 1][0], coords[i][1] - coords[i - 1][1]);
+      }
+      return s;
+    }
+
+    function makeFeat(id, src, coords, extra) {
+      extra = extra || {};
+      const source = src || "edit";
+      return {
+        id, src: source,
+        src_id: extra.src_id || "",
+        name: extra.name || "",
+        fclass: extra.fclass || "",
+        network: extra.network || (source === "tiger" ? "tiger" : source === "osm" ? "osm" : "edit"),
+        coords: coords.map((p) => [p[0], p[1]]),
+        length_px: Math.round(lengthPx(coords) * 10) / 10,
+      };
+    }
+
+    function networkOf(f) {
+      if (!f) return "edit";
+      if (f.network) return f.network;
+      if (f.src === "tiger") return "tiger";
+      if (f.src === "osm") return "osm";
+      return "edit";
+    }
+
+    function refreshIds() {
+      nextId = 1;
+      for (const f of roads) nextId = Math.max(nextId, (f.id || 0) + 1);
+    }
+
+    function adoptRoads(list, asOrig) {
+      roads = (list || []).map((f) => makeFeat(f.id, f.src, f.coords, f));
+      refreshIds();
+      if (asOrig) roadsOrig = roads.map((f) => makeFeat(f.id, f.src, f.coords, f));
+      undoStack = [];
+      selected = null;
+      selVerts = new Set();
+      boxDrag = null;
+      groupDrag = null;
+      cancelDraft();
+      afterEdit(false);
+    }
+
+    function snapshot() {
+      undoStack.push(roads.map((f) => makeFeat(f.id, f.src, f.coords, f)));
+      if (undoStack.length > 40) undoStack.shift();
+    }
+
+    function afterEdit(dirty) {
+      meta.dirty = dirty;
+      meta.n_roads = roads.length;
+      meta.undo = undoStack.length;
+      const gsd = meta.gsd_m || 0.3;
+      meta.km = +(roads.reduce((s, f) => s + (f.length_px || 0), 0) * gsd / 1000).toFixed(2);
+      setStatus();
+      drawRoads();
+      renderSel();
+    }
+
+    function applyPayload(data) {
+      const list = data.roads;
+      const rest = { ...data };
+      delete rest.roads;
+      Object.assign(meta, rest);
+      if (list) adoptRoads(list, true);
+      else {
+        setStatus();
+        drawRoads();
+        renderSel();
+      }
+    }
+
+    function insertOnLine(coords, x, y) {
+      if (coords.length < 2) return { coords, at: [x, y] };
+      let acc = 0;
+      const segs = [];
+      for (let i = 1; i < coords.length; i++) {
+        const a = coords[i - 1], b = coords[i];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        segs.push({ a, b, len, acc });
+        acc += len;
+      }
+      let best = segs[0], bestD = Infinity, at = [x, y], dAlong = 0;
+      for (const s of segs) {
+        const h = distSeg(x, y, s.a[0], s.a[1], s.b[0], s.b[1]);
+        if (h.d < bestD) {
+          bestD = h.d;
+          best = s;
+          at = [h.qx, h.qy];
+          dAlong = s.acc + h.t * s.len;
+        }
+      }
+      for (const p of coords) {
+        if ((p[0] - at[0]) ** 2 + (p[1] - at[1]) ** 2 < 0.25) {
+          return { coords: coords.map((q) => [q[0], q[1]]), at: [p[0], p[1]] };
+        }
+      }
+      const out = [[coords[0][0], coords[0][1]]];
+      let inserted = false;
+      acc = 0;
+      for (let i = 1; i < coords.length; i++) {
+        const a = coords[i - 1], b = coords[i];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (!inserted && acc - 1e-6 <= dAlong && dAlong <= acc + len + 1e-6) {
+          out.push(at);
+          inserted = true;
+        }
+        out.push([b[0], b[1]]);
+        acc += len;
+      }
+      if (!inserted) out.push(at);
+      return { coords: out, at };
+    }
+
+    function setStatus() {
+      if (!meta.open) { $("status").textContent = "Pick a tile on the map."; return; }
+      const n = meta.n_tiles || 1;
+      const label = n > 1 ? `3×3 around ${meta.stem}` : meta.stem;
+      $("current-tile").textContent = label;
+      const dirty = meta.dirty ? "unsaved" : "saved";
+      $("status").innerHTML =
+        `${label}  ·  ${meta.width}×${meta.height}  ·  ${meta.n_roads || roads.length} lines  ·  ${meta.km || 0} km  ·  ${meta.source}  ·  undo ${meta.undo || 0}  ·  ${dirty}`;
+    }
+
+    function renderSel() {
+      const box = $("sel-box");
+      const f = roads.find((r) => r.id === selected);
+      const nSel = selVerts.size;
+      if (!f && !nSel) { box.textContent = "Click a line, or drag a box over vertices."; return; }
+      let html = "";
+      if (f) {
+        const m = ((f.length_px || 0) * (meta.gsd_m || 0.3)).toFixed(1);
+        html += `<div class="kv"><b style="color:var(--text)">${f.name || "(unnamed)"}</b></div>
+        <div class="kv">id ${f.id} · ${f.src} · ${f.fclass || ""}</div>
+        <div class="kv">${m} m · ${f.coords.length} vertices</div>`;
+      }
+      if (nSel) html += `<div class="kv" style="margin-top:8px;color:var(--accent)">${nSel} vertex${nSel === 1 ? "" : "es"} selected</div>`;
+      box.innerHTML = html;
+    }
+
+    function rgbSource() {
+      const maxLevel = Math.max(0, meta.max_level || 0);
+      return {
+        width: meta.width, height: meta.height, tileSize: meta.tile, maxLevel,
+        minLevel: Math.max(0, maxLevel - 8), tileOverlap: 0,
+        getTileUrl: (level, x, y) => `/tiles/rgb/${level}/${x}/${y}.jpg?w=${meta.width}&h=${meta.height}`,
+      };
+    }
+
+    function clientToImage(ev) {
+      const ip = viewer.viewport.windowToImageCoordinates(new OpenSeadragon.Point(ev.clientX, ev.clientY));
+      return { x: ip.x, y: ip.y };
+    }
+
+    function screenToImgPx(px) {
+      if (!viewer || !viewer.viewport) return px;
+      const p1 = viewer.viewport.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+      const p2 = viewer.viewport.windowToImageCoordinates(new OpenSeadragon.Point(px, 0));
+      return Math.max(1, Math.abs(p2.x - p1.x));
+    }
+
+    function imgToWin(x, y) {
+      return viewer.viewport.imageToWindowCoordinates(new OpenSeadragon.Point(x, y));
+    }
+
+    function setMode(next) {
+      if (draft.length && next !== mode) cancelDraft();
+      if (next !== "vertex") {
+        selVerts = new Set();
+        boxDrag = null;
+        groupDrag = null;
+      }
+      mode = next;
+      for (const id of ["b-pan", "b-del", "b-vertex"]) {
+        $(id).classList.toggle("active", $(id).dataset.mode === mode);
+      }
+      applyNav();
+      drawRoads();
+    }
+
+    function applyNav() {
+      if (!viewer) return;
+      const pan = mode === "pan";
+      viewer.gestureSettingsMouse.dragToPan = pan;
+      viewer.gestureSettingsMouse.dblClickToZoom = pan;
+    }
+
+    function cancelDraft() {
+      draft = [];
+      stretchFrom = null;
+      ghost = null;
+      drawRoads();
+    }
+
+    function isStretchMod() {
+      return mode === "vertex" && leftShift && !vertexDrag && !groupDrag && !boxDrag;
+    }
+
+    function endStretch() {
+      if (!draft.length) return;
+      if (ghost && draft.length) {
+        const last = draft[draft.length - 1];
+        if (Math.hypot(ghost[0] - last[0], ghost[1] - last[1]) > 1) draft.push([ghost[0], ghost[1]]);
+      }
+      if (draft.length >= 2) finishDraft();
+      else cancelDraft();
+    }
+
+    function distSeg(px, py, ax, ay, bx, by) {
+      const vx = bx - ax, vy = by - ay;
+      const l2 = vx * vx + vy * vy;
+      let t = l2 < 1e-9 ? 0 : ((px - ax) * vx + (py - ay) * vy) / l2;
+      t = Math.max(0, Math.min(1, t));
+      const qx = ax + t * vx, qy = ay + t * vy;
+      return { d: Math.hypot(px - qx, py - qy), qx, qy, t };
+    }
+
+    function hitRoad(ix, iy, maxImg) {
+      let best = null;
+      for (const f of roads) {
+        const c = f.coords;
+        for (let i = 1; i < c.length; i++) {
+          const h = distSeg(ix, iy, c[i - 1][0], c[i - 1][1], c[i][0], c[i][1]);
+          if (h.d <= maxImg && (!best || h.d < best.d)) best = { f, ...h, i };
+        }
+      }
+      return best;
+    }
+
+    function hitVertex(ix, iy, maxImg) {
+      let best = null;
+      for (const f of roads) {
+        f.coords.forEach((p, i) => {
+          const d = Math.hypot(ix - p[0], iy - p[1]);
+          if (d <= maxImg && (!best || d < best.d)) best = { f, i, d, x: p[0], y: p[1] };
+        });
+      }
+      return best;
+    }
+
+    function vertKey(id, i) { return `${id}:${i}`; }
+
+    function selBBox(pad) {
+      if (!selVerts.size) return null;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const key of selVerts) {
+        const [id, i] = key.split(":").map(Number);
+        const f = roads.find((r) => r.id === id);
+        if (!f || !f.coords[i]) continue;
+        const p = f.coords[i];
+        x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]);
+        x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]);
+      }
+      if (!isFinite(x0)) return null;
+      const m = pad || screenToImgPx(10);
+      return { x0: x0 - m, y0: y0 - m, x1: x1 + m, y1: y1 + m };
+    }
+
+    function pointInSelBBox(x, y) {
+      const b = selBBox();
+      return !!(b && x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1);
+    }
+
+    function vertsInBox(x0, y0, x1, y1) {
+      const xa = Math.min(x0, x1), xb = Math.max(x0, x1);
+      const ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+      const out = [];
+      for (const f of roads) {
+        f.coords.forEach((p, i) => {
+          if (p[0] >= xa && p[0] <= xb && p[1] >= ya && p[1] <= yb) out.push({ id: f.id, i });
+        });
+      }
+      return out;
+    }
+
+    function startGroupDrag(pointerId, x, y, clientX, clientY) {
+      snapshot();
+      const items = [];
+      for (const key of selVerts) {
+        const [id, i] = key.split(":").map(Number);
+        const f = roads.find((r) => r.id === id);
+        if (!f || !f.coords[i]) continue;
+        items.push({ id, i, x: f.coords[i][0], y: f.coords[i][1] });
+      }
+      groupDrag = { pointerId, x0: x, y0: y, cx0: clientX, cy0: clientY, moved: false, items };
+    }
+
+    function deleteSelectedVerts() {
+      if (!selVerts.size) return;
+      snapshot();
+      const byId = new Map();
+      for (const key of selVerts) {
+        const [id, i] = key.split(":").map(Number);
+        if (!byId.has(id)) byId.set(id, new Set());
+        byId.get(id).add(i);
+      }
+      const keep = [];
+      for (const f of roads) {
+        const idxs = byId.get(f.id);
+        if (!idxs) { keep.push(f); continue; }
+        f.coords = f.coords.filter((_, i) => !idxs.has(i));
+        if (f.coords.length >= 2) {
+          touchLength(f);
+          keep.push(f);
+        }
+      }
+      roads = keep;
+      selVerts = new Set();
+      afterEdit(true);
+    }
+
+    function shareTolImg() {
+      const screen = viewer && viewer.viewport ? screenToImgPx(10) : 8;
+      const maxPx = SHARE_M / (meta.gsd_m || 0.3);
+      return Math.max(1, Math.min(screen, maxPx));
+    }
+
+    function touchLength(f) {
+      f.length_px = Math.round(lengthPx(f.coords) * 10) / 10;
+    }
+
+    function closestOnRoad(f, x, y) {
+      let best = null;
+      const c = f.coords;
+      for (let i = 1; i < c.length; i++) {
+        const h = distSeg(x, y, c[i - 1][0], c[i - 1][1], c[i][0], c[i][1]);
+        if (!best || h.d < best.d) best = { d: h.d, qx: h.qx, qy: h.qy, t: h.t, i };
+      }
+      return best;
+    }
+
+    function nearestVertexOnRoad(f, x, y) {
+      let best = null;
+      f.coords.forEach((p, i) => {
+        const d = Math.hypot(x - p[0], y - p[1]);
+        if (!best || d < best.d) best = { i, d, x: p[0], y: p[1] };
+      });
+      return best;
+    }
+
+    function indexOfPoint(coords, x, y, tol) {
+      const tol2 = tol * tol;
+      for (let i = 0; i < coords.length; i++) {
+        const dx = coords[i][0] - x, dy = coords[i][1] - y;
+        if (dx * dx + dy * dy <= tol2) return i;
+      }
+      return -1;
+    }
+
+    function insertVertexOnRoad(f, x, y, reuseTol) {
+      const nv = nearestVertexOnRoad(f, x, y);
+      if (nv && nv.d <= reuseTol) return { i: nv.i, inserted: false, x: nv.x, y: nv.y };
+      const ins = insertOnLine(f.coords, x, y);
+      f.coords = ins.coords;
+      touchLength(f);
+      const i = indexOfPoint(f.coords, ins.at[0], ins.at[1], 0.6);
+      return { i: Math.max(0, i), inserted: true, x: ins.at[0], y: ins.at[1] };
+    }
+
+    function weldAt(x, y, network) {
+      const tol = shareTolImg();
+      const net = network || "edit";
+      const members = [];
+      let inserted = false;
+      for (const f of roads) {
+        if (networkOf(f) !== net) continue;
+        const hit = closestOnRoad(f, x, y);
+        if (!hit || hit.d > tol) continue;
+        const put = insertVertexOnRoad(f, hit.qx, hit.qy, tol);
+        if (put.inserted) inserted = true;
+        f.coords[put.i] = [x, y];
+        touchLength(f);
+        members.push({ id: f.id, i: put.i });
+      }
+      return { members, inserted };
+    }
+
+    function moveMembers(members, x, y) {
+      const seen = new Set();
+      for (const m of members) {
+        const key = `${m.id}:${m.i}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const f = roads.find((r) => r.id === m.id);
+        if (!f || !f.coords[m.i]) continue;
+        f.coords[m.i] = [x, y];
+        touchLength(f);
+      }
+    }
+
+    function sharedMask(verts, tol) {
+      const cell = Math.max(tol, 1);
+      const buckets = new Map();
+      const key = (x, y) => `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+      verts.forEach((v, idx) => {
+        const k = key(v.x, v.y);
+        let bin = buckets.get(k);
+        if (!bin) { bin = []; buckets.set(k, bin); }
+        bin.push(idx);
+      });
+      const shared = new Uint8Array(verts.length);
+      verts.forEach((v, i) => {
+        const cx = Math.floor(v.x / cell), cy = Math.floor(v.y / cell);
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const bin = buckets.get(`${cx + dx},${cy + dy}`);
+            if (!bin) continue;
+            for (const j of bin) {
+              if (j === i) continue;
+              const w = verts[j];
+              if (w.id === v.id) continue;
+              if (w.network !== v.network) continue;
+              if (Math.hypot(v.x - w.x, v.y - w.y) <= tol) {
+                shared[i] = 1;
+                return;
+              }
+            }
+          }
+        }
+      });
+      return shared;
+    }
+
+    function beginVertexEdit(x, y, pointerId, clientX, clientY) {
+      const maxImg = screenToImgPx(14);
+      const hit = hitRoad(x, y, maxImg);
+      let v = hitVertex(x, y, maxImg);
+      if (v && hit && networkOf(v.f) !== networkOf(hit.f)) {
+        const onHit = nearestVertexOnRoad(hit.f, x, y);
+        if (onHit && onHit.d <= maxImg * 0.5) v = { f: hit.f, i: onHit.i, d: onHit.d, x: onHit.x, y: onHit.y };
+        else v = null;
+      }
+      if (!v && !hit) return false;
+      const preferVertex = !!(v && (!hit || v.d <= Math.max(maxImg * 0.5, 1)));
+      snapshot();
+      let px, py, inserted = false, feat = null;
+      if (preferVertex) {
+        px = v.x;
+        py = v.y;
+        selected = v.f.id;
+        feat = v.f;
+      } else {
+        const put = insertVertexOnRoad(hit.f, hit.qx, hit.qy, shareTolImg());
+        inserted = put.inserted;
+        px = put.x;
+        py = put.y;
+        selected = hit.f.id;
+        feat = hit.f;
+      }
+      const net = networkOf(feat);
+      const welded = weldAt(px, py, net);
+      vertexDrag = {
+        pointerId,
+        members: welded.members,
+        inserted: inserted || welded.inserted,
+        moved: false,
+        network: net,
+        x0: clientX,
+        y0: clientY,
+        x: px,
+        y: py,
+      };
+      selVerts = new Set(welded.members.map((m) => vertKey(m.id, m.i)));
+      return true;
+    }
+
+    function viewBounds() {
+      const b = viewer.viewport.viewportToImageRectangle(viewer.viewport.getBounds());
+      return { x0: b.x - 40, y0: b.y - 40, x1: b.x + b.width + 40, y1: b.y + b.height + 40 };
+    }
+
+    function drawRoads() {
+      const canvas = $("road-layer");
+      const stage = $("stage").getBoundingClientRect();
+      const w = Math.max(1, Math.floor(stage.width));
+      const h = Math.max(1, Math.floor(stage.height));
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!viewer || !viewer.viewport || !roadsOn) return;
+      const rect = canvas.getBoundingClientRect();
+      const vb = viewBounds();
+      const colors = { osm: "#3dbbff", tiger: "#ffb020", edit: "#5bd08a" };
+      const toCanvas = (x, y) => {
+        const q = imgToWin(x, y);
+        return [q.x - rect.left, q.y - rect.top];
+      };
+      for (const f of roads) {
+        const c = f.coords;
+        if (!c.length) continue;
+        let vis = false;
+        for (const p of c) {
+          if (p[0] >= vb.x0 && p[0] <= vb.x1 && p[1] >= vb.y0 && p[1] <= vb.y1) { vis = true; break; }
+        }
+        if (!vis) continue;
+        ctx.beginPath();
+        c.forEach((p, i) => {
+          const [x, y] = toCanvas(p[0], p[1]);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = f.id === selected ? "#ffffff" : (colors[f.src] || "#3dbbff");
+        ctx.lineWidth = f.id === selected ? 3.5 : 2.2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.stroke();
+      }
+      const drawPts = (pts, color) => {
+        if (!pts.length) return;
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const [x, y] = toCanvas(p[0], p[1]);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        pts.forEach((p) => {
+          const [x, y] = toCanvas(p[0], p[1]);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      };
+      const live = ghost && draft.length ? draft.concat([ghost]) : draft;
+      if (live.length) drawPts(live, "#ff6b6b");
+      if (mode === "vertex") {
+        const tol = shareTolImg();
+        const verts = [];
+        for (const f of roads) {
+          for (let i = 0; i < f.coords.length; i++) {
+            const p = f.coords[i];
+            if (p[0] < vb.x0 || p[0] > vb.x1 || p[1] < vb.y0 || p[1] > vb.y1) continue;
+            verts.push({ id: f.id, i, x: p[0], y: p[1], network: networkOf(f) });
+          }
+        }
+        const shared = sharedMask(verts, tol);
+        verts.forEach((v, i) => {
+          const [x, y] = toCanvas(v.x, v.y);
+          const picked = selVerts.has(vertKey(v.id, v.i));
+          if (picked) {
+            ctx.fillStyle = "#3dbbff";
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          } else if (shared[i]) {
+            ctx.fillStyle = "#ffd166";
+            ctx.strokeStyle = "#1b2028";
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.rect(x - 4.5, y - 4.5, 9, 9);
+            ctx.fill();
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = "#ffffff";
+            ctx.strokeStyle = "#1b2028";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        });
+        const marquee = boxDrag
+          ? { x0: boxDrag.x0, y0: boxDrag.y0, x1: boxDrag.x1, y1: boxDrag.y1 }
+          : (selVerts.size > 1 ? selBBox(screenToImgPx(8)) : null);
+        if (marquee) {
+          const [ax, ay] = toCanvas(marquee.x0, marquee.y0);
+          const [bx, by] = toCanvas(marquee.x1, marquee.y1);
+          ctx.strokeStyle = "#3dbbff";
+          ctx.fillStyle = boxDrag ? "rgba(61,187,255,0.15)" : "rgba(61,187,255,0.06)";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 3]);
+          ctx.fillRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+          ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+          ctx.setLineDash([]);
+        }
+      }
+      if (hoverPt) {
+        const [x, y] = toCanvas(hoverPt.x, hoverPt.y);
+        if (hoverPt.insert) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.fillStyle = "rgba(255,255,255,0.15)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function openViewer() {
+      if (viewer) { viewer.destroy(); viewer = null; }
+      viewer = OpenSeadragon({
+        id: "viewer",
+        prefixUrl: "https://cdn.jsdelivr.net/npm/openseadragon@4.1.1/build/openseadragon/images/",
+        showNavigator: true,
+        navigatorPosition: "BOTTOM_RIGHT",
+        animationTime: 0.2,
+        blendTime: 0.08,
+        immediateRender: true,
+        maxZoomPixelRatio: 4,
+        minZoomImageRatio: 0.8,
+        imageLoaderLimit: 16,
+        placeholderFillStyle: "#0b0d10",
+        gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true, dragToPan: true, scrollToZoom: true },
+      });
+      viewer.open(rgbSource());
+      viewer.addOnceHandler("open", () => {
+        viewer.viewport.goHome(true);
+        drawRoads();
+      });
+      applyNav();
+      viewer.canvas.addEventListener("pointerdown", onPointerDown, true);
+      viewer.canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
+      viewer.canvas.addEventListener("dblclick", onDblClick, true);
+      viewer.addHandler("animation", drawRoads);
+      viewer.addHandler("update-viewport", drawRoads);
+    }
+
+    function finishDraft() {
+      if (draft.length < 2) { cancelDraft(); return; }
+      snapshot();
+      if (stretchFrom) {
+        const hit = roads.find((r) => r.id === stretchFrom.id);
+        if (hit) {
+          const ins = insertOnLine(hit.coords, stretchFrom.x, stretchFrom.y);
+          hit.coords = ins.coords;
+          hit.length_px = Math.round(lengthPx(hit.coords) * 10) / 10;
+          const at = ins.at;
+          let spur = [at].concat(draft.filter((c) => (c[0] - at[0]) ** 2 + (c[1] - at[1]) ** 2 > 0.01));
+          if (spur.length < 2) spur = [at, draft[draft.length - 1]];
+          roads.push(makeFeat(nextId++, "edit", spur, { name: "spur", network: networkOf(hit) }));
+          selected = nextId - 1;
+          weldAt(at[0], at[1], networkOf(hit));
+        }
+      } else {
+        roads.push(makeFeat(nextId++, "edit", draft));
+        selected = nextId - 1;
+        const f = roads[roads.length - 1];
+        weldAt(f.coords[0][0], f.coords[0][1], networkOf(f));
+        weldAt(f.coords[f.coords.length - 1][0], f.coords[f.coords.length - 1][1], networkOf(f));
+      }
+      cancelDraft();
+      afterEdit(true);
+    }
+
+    function onDblClick(ev) {
+      if (mode !== "vertex" || !draft.length) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (draft.length >= 2) finishDraft();
+    }
+
+    function onPointerDown(ev) {
+      if (!viewer || !meta.open) return;
+      if (ev.button === 2 || ev.button === 1) {
+        ev.preventDefault();
+        panDrag = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+        try { viewer.canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+        return;
+      }
+      if (ev.button !== 0 || mode === "pan") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const p = clientToImage(ev);
+      const maxImg = screenToImgPx(14);
+      if (mode === "vertex") {
+        if (isStretchMod() || stretchFrom || (mode === "vertex" && leftShift && draft.length)) {
+          if (stretchFrom || draft.length) {
+            draft.push([p.x, p.y]);
+          } else {
+            const hit = hitRoad(p.x, p.y, maxImg * 1.4);
+            if (hit) {
+              stretchFrom = { id: hit.f.id, x: hit.qx, y: hit.qy };
+              selected = hit.f.id;
+              draft = [[hit.qx, hit.qy]];
+            } else {
+              draft = [[p.x, p.y]];
+            }
+            selVerts = new Set();
+          }
+          renderSel();
+          drawRoads();
+          return;
+        }
+        const v = hitVertex(p.x, p.y, maxImg);
+        const onVert = v && v.d <= Math.max(maxImg * 0.5, 1);
+        const picked = onVert && selVerts.has(vertKey(v.f.id, v.i));
+        const additive = ev.ctrlKey || ev.metaKey;
+        if (additive && onVert) {
+          const key = vertKey(v.f.id, v.i);
+          if (selVerts.has(key)) selVerts.delete(key);
+          else selVerts.add(key);
+        } else if (selVerts.size && (picked || (!onVert && !hitRoad(p.x, p.y, maxImg) && pointInSelBBox(p.x, p.y)))) {
+          startGroupDrag(ev.pointerId, p.x, p.y, ev.clientX, ev.clientY);
+        } else if (!beginVertexEdit(p.x, p.y, ev.pointerId, ev.clientX, ev.clientY)) {
+          boxDrag = { pointerId: ev.pointerId, x0: p.x, y0: p.y, x1: p.x, y1: p.y, additive };
+          if (!additive) selVerts = new Set();
+        }
+        try { viewer.canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+        renderSel();
+        drawRoads();
+        return;
+      }
+      if (mode === "delete") {
+        const hit = hitRoad(p.x, p.y, maxImg);
+        if (!hit) return;
+        snapshot();
+        selected = null;
+        roads = roads.filter((r) => r.id !== hit.f.id);
+        afterEdit(true);
+        return;
+      }
+    }
+
+    function onPointerMove(ev) {
+      if (panDrag && ev.pointerId === panDrag.pointerId && viewer.viewport) {
+        const dx = ev.clientX - panDrag.x;
+        const dy = ev.clientY - panDrag.y;
+        panDrag.x = ev.clientX; panDrag.y = ev.clientY;
+        const delta = viewer.viewport.deltaPointsFromPixels(new OpenSeadragon.Point(-dx, -dy));
+        viewer.viewport.panBy(delta, true);
+        return;
+      }
+      if (groupDrag && ev.pointerId === groupDrag.pointerId) {
+        const p = clientToImage(ev);
+        if (Math.hypot(ev.clientX - groupDrag.cx0, ev.clientY - groupDrag.cy0) > 3) groupDrag.moved = true;
+        const dx = p.x - groupDrag.x0, dy = p.y - groupDrag.y0;
+        for (const it of groupDrag.items) {
+          const f = roads.find((r) => r.id === it.id);
+          if (!f || !f.coords[it.i]) continue;
+          f.coords[it.i] = [it.x + dx, it.y + dy];
+          touchLength(f);
+        }
+        drawRoads();
+        return;
+      }
+      if (boxDrag && ev.pointerId === boxDrag.pointerId) {
+        const p = clientToImage(ev);
+        boxDrag.x1 = p.x;
+        boxDrag.y1 = p.y;
+        drawRoads();
+        return;
+      }
+      if (vertexDrag && ev.pointerId === vertexDrag.pointerId) {
+        const p = clientToImage(ev);
+        if (Math.hypot(ev.clientX - vertexDrag.x0, ev.clientY - vertexDrag.y0) > 3) vertexDrag.moved = true;
+        vertexDrag.x = p.x;
+        vertexDrag.y = p.y;
+        moveMembers(vertexDrag.members, p.x, p.y);
+        drawRoads();
+        return;
+      }
+      if (draft.length) {
+        const p = clientToImage(ev);
+        ghost = [p.x, p.y];
+        drawRoads();
+        return;
+      }
+      if (!viewer || !meta.open || mode === "pan") { hoverPt = null; return; }
+      const p = clientToImage(ev);
+      const maxImg = screenToImgPx(14);
+      if (mode === "vertex" && leftShift && !stretchFrom) {
+        const hit = hitRoad(p.x, p.y, maxImg * 1.4);
+        hoverPt = hit ? { x: hit.qx, y: hit.qy } : null;
+        drawRoads();
+      } else if (mode === "vertex") {
+        const v = hitVertex(p.x, p.y, maxImg);
+        if (v && v.d <= Math.max(maxImg * 0.5, 1)) {
+          hoverPt = { x: v.x, y: v.y };
+        } else {
+          const hit = hitRoad(p.x, p.y, maxImg);
+          hoverPt = hit ? { x: hit.qx, y: hit.qy, insert: true } : null;
+        }
+        drawRoads();
+      }
+    }
+
+    function onPointerUp(ev) {
+      if (panDrag && ev.pointerId === panDrag.pointerId) panDrag = null;
+      if (boxDrag && ev.pointerId === boxDrag.pointerId) {
+        const box = boxDrag;
+        boxDrag = null;
+        const w = Math.abs(box.x1 - box.x0), h = Math.abs(box.y1 - box.y0);
+        if (w > screenToImgPx(4) && h > screenToImgPx(4)) {
+          const hits = vertsInBox(box.x0, box.y0, box.x1, box.y1);
+          const next = box.additive ? new Set(selVerts) : new Set();
+          hits.forEach((v) => next.add(vertKey(v.id, v.i)));
+          selVerts = next;
+        } else if (!box.additive) {
+          selVerts = new Set();
+        }
+        renderSel();
+        drawRoads();
+        return;
+      }
+      if (groupDrag && ev.pointerId === groupDrag.pointerId) {
+        const drag = groupDrag;
+        groupDrag = null;
+        if (drag.moved) afterEdit(true);
+        else if (undoStack.length) { undoStack.pop(); setStatus(); }
+        renderSel();
+        drawRoads();
+        return;
+      }
+      if (vertexDrag && ev.pointerId === vertexDrag.pointerId) {
+        const drag = vertexDrag;
+        vertexDrag = null;
+        if (drag.moved) {
+          const welded = weldAt(drag.x, drag.y, drag.network);
+          if (welded.members.length) drag.members = welded.members;
+          afterEdit(true);
+        } else if (drag.inserted) {
+          afterEdit(true);
+        } else if (undoStack.length) {
+          undoStack.pop();
+          setStatus();
+          drawRoads();
+          renderSel();
+        }
+      }
+    }
+
+    function showMap() { $("map-overlay").classList.remove("hidden"); drawMapGrid(); }
+    function hideMap() { $("map-overlay").classList.add("hidden"); }
+
+    function cellSelectable(c) { return nhood === 1 || !!(c && c.selectable); }
+    function setNhood(next) {
+      nhood = next === 1 ? 1 : 9;
+      $("b-nhood-1").classList.toggle("active", nhood === 1);
+      $("b-nhood-9").classList.toggle("active", nhood === 9);
+      $("map-title").textContent = nhood === 1
+        ? "Click any tile to edit just that tile."
+        : "Click an interior tile to edit it together with the 8 tiles around it.";
+      drawMapGrid();
+    }
+
+    function drawMapGrid() {
+      const canvas = $("map-grid");
+      const img = $("map-img");
+      if (!overview || !img.naturalWidth) return;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const block = new Set(overview.block || []);
+      for (const c of overview.cells) {
+        if (nhood === 9 && !c.selectable) {
+          ctx.fillStyle = "rgba(0,0,0,0.42)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+        }
+        if (block.has(c.stem)) {
+          ctx.fillStyle = "rgba(91,208,138,0.22)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+        }
+        if (c.has_mask) {
+          ctx.strokeStyle = "#3dbbff";
+          ctx.lineWidth = 2;
+        } else {
+          ctx.strokeStyle = "rgba(232,237,244,0.35)";
+          ctx.lineWidth = 1;
+        }
+        ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
+      }
+      if (hoverCell && cellSelectable(hoverCell)) {
+        for (const c of overview.cells) {
+          const hit = nhood === 1
+            ? c.stem === hoverCell.stem
+            : Math.abs(c.ri - hoverCell.ri) <= 1 && Math.abs(c.ci - hoverCell.ci) <= 1;
+          if (!hit) continue;
+          ctx.fillStyle = "rgba(61,187,255,0.28)";
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+        }
+      }
+    }
+
+    async function readNdjson(res, onEvent) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) onEvent(JSON.parse(line));
+        }
+      }
+      if (buf.trim()) onEvent(JSON.parse(buf.trim()));
+    }
+
+    function showLoadPanel(center, tiles) {
+      $("load-overlay").classList.remove("hidden");
+      const n = (tiles && tiles.length) || nhood;
+      $("load-title").textContent = n === 1 ? `Loading ${center}` : `Loading 3×3 around ${center}`;
+      $("load-sub").textContent = "Reading orthos into RAM…";
+      $("load-bar-fill").style.width = "0%";
+      $("load-pct").textContent = `0 / ${n}`;
+      const ul = $("load-steps");
+      ul.innerHTML = "";
+      (tiles || []).forEach((t, i) => {
+        const li = document.createElement("li");
+        li.id = `load-step-${i}`;
+        li.innerHTML = `<span class="mark">·</span><span class="role">${t.role || ""}</span><span class="name">${t.stem}</span><span class="detail">waiting</span>`;
+        ul.appendChild(li);
+      });
+    }
+    function hideLoadPanel() { $("load-overlay").classList.add("hidden"); }
+    function setLoadStep(i, cls, detail) {
+      const li = $(`load-step-${i}`);
+      if (!li) return;
+      li.className = cls;
+      li.querySelector(".mark").textContent = cls === "done" ? "✓" : "→";
+      li.querySelector(".detail").textContent = detail;
+    }
+
+    async function openBlock(stem) {
+      if (opening) return;
+      const label = nhood === 1 ? stem : `3×3 around ${stem}`;
+      if (meta.dirty && !confirm(`Unsaved edits. Load ${label} anyway?`)) return;
+      opening = true;
+      hideMap();
+      showLoadPanel(stem, []);
+      let stats = null;
+      let loadedRoads = null;
+      try {
+        const res = await fetch("/api/open-block", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stem, neighborhood: nhood, source: $("source").value }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        let failed = null;
+        await readNdjson(res, (ev) => {
+          if (ev.message) { $("status").textContent = ev.message; $("load-sub").textContent = ev.message; }
+          if (ev.event === "start") showLoadPanel(ev.center, ev.tiles);
+          if (ev.event === "tile") {
+            const idx = (ev.i || 1) - 1;
+            const total = ev.total || 9;
+            $("load-bar-fill").style.width = `${(ev.i / total) * 100}%`;
+            $("load-pct").textContent = `${ev.i} / ${total}`;
+            if (ev.phase === "ortho") setLoadStep(idx, "active", "reading ortho…");
+            if (ev.phase === "done") setLoadStep(idx, "done", `${ev.elapsed_s}s`);
+          }
+          if (ev.event === "ready") {
+            stats = ev.stats;
+            loadedRoads = ev.roads || null;
+          }
+          if (ev.event === "error") failed = ev.message;
+        });
+        if (failed) throw new Error(failed);
+      } catch (err) {
+        opening = false;
+        hideLoadPanel(); showMap(); $("status").textContent = String(err); return;
+      }
+      try {
+        if (!stats) throw new Error("load did not finish");
+        if (loadedRoads) applyPayload({ ...stats, roads: loadedRoads });
+        else {
+          meta = stats;
+          applyPayload(await api("/api/roads"));
+        }
+        hideLoadPanel();
+        openViewer();
+        if (overview) { overview.current = stem; overview.block = meta.block || []; drawMapGrid(); }
+      } catch (err) {
+        hideLoadPanel(); showMap(); $("status").textContent = String(err);
+      } finally {
+        opening = false;
+      }
+    }
+
+    $("b-map").addEventListener("click", showMap);
+    $("b-pan").addEventListener("click", () => setMode("pan"));
+    $("b-del").addEventListener("click", () => setMode("delete"));
+    $("b-vertex").addEventListener("click", () => setMode("vertex"));
+    $("b-roads").addEventListener("click", () => {
+      roadsOn = !roadsOn;
+      $("b-roads").classList.toggle("active", roadsOn);
+      $("b-roads").textContent = roadsOn ? "Lines on" : "Lines off";
+      drawRoads();
+    });
+    $("source").addEventListener("change", async () => {
+      if (!meta.open) return;
+      if (meta.dirty && !confirm("Switching source reloads the map and drops unsaved edits. Continue?")) {
+        $("source").value = meta.source || "osm";
+        return;
+      }
+      applyPayload(await api("/api/source", { source: $("source").value }));
+    });
+    $("b-drop").addEventListener("click", () => {
+      const minPx = Math.max(1, Number($("min-m").value) / (meta.gsd_m || 0.3));
+      snapshot();
+      roads = roads.filter((f) => (f.length_px || 0) >= minPx);
+      afterEdit(true);
+    });
+    $("b-join").addEventListener("click", () => {
+      const maxPx = Math.max(1, Number($("join-m").value) / (meta.gsd_m || 0.3));
+      snapshot();
+      const used = new Set();
+      const ends = [];
+      roads.forEach((f, i) => {
+        if (f.coords.length < 2) return;
+        ends.push({ i, s: 0, x: f.coords[0][0], y: f.coords[0][1], net: networkOf(f) });
+        ends.push({ i, s: -1, x: f.coords[f.coords.length - 1][0], y: f.coords[f.coords.length - 1][1], net: networkOf(f) });
+      });
+      for (let a = 0; a < ends.length; a++) {
+        const ea = ends[a];
+        if (used.has(ea.i)) continue;
+        let best = null, bestD = maxPx;
+        for (let b = a + 1; b < ends.length; b++) {
+          const eb = ends[b];
+          if (eb.i === ea.i || used.has(eb.i) || eb.net !== ea.net) continue;
+          const d = Math.hypot(ea.x - eb.x, ea.y - eb.y);
+          if (d < bestD) { bestD = d; best = eb; }
+        }
+        if (!best) continue;
+        const ca = roads[ea.i].coords.slice();
+        const cb = roads[best.i].coords.slice();
+        let merged;
+        if (ea.s === -1 && best.s === 0) merged = ca.concat(cb.slice(1));
+        else if (ea.s === -1 && best.s === -1) merged = ca.concat(cb.slice().reverse().slice(1));
+        else if (ea.s === 0 && best.s === -1) merged = cb.concat(ca.slice(1));
+        else merged = ca.slice().reverse().concat(cb.slice(1));
+        roads[ea.i].coords = merged;
+        roads[ea.i].length_px = Math.round(lengthPx(merged) * 10) / 10;
+        used.add(best.i);
+      }
+      roads = roads.filter((_, i) => !used.has(i));
+      afterEdit(true);
+    });
+    $("b-undo").addEventListener("click", () => {
+      if (!undoStack.length) return;
+      roads = undoStack.pop();
+      refreshIds();
+      selVerts = new Set();
+      afterEdit(true);
+    });
+    $("b-reset").addEventListener("click", () => {
+      if (!confirm("Reset to the original road map for these tiles?")) return;
+      snapshot();
+      roads = roadsOrig.map((f) => makeFeat(f.id, f.src, f.coords, f));
+      refreshIds();
+      selVerts = new Set();
+      afterEdit(false);
+    });
+    $("b-save").addEventListener("click", async () => {
+      $("status").textContent = "Saving…";
+      try {
+        const out = await api("/api/save", { roads });
+        meta.dirty = false;
+        setStatus();
+        $("status").textContent += `  ·  wrote ${out.n_roads} lines`;
+      } catch (err) {
+        $("status").textContent = String(err);
+      }
+    });
+    $("b-nhood-1").addEventListener("click", () => setNhood(1));
+    $("b-nhood-9").addEventListener("click", () => setNhood(9));
+    $("map-grid").addEventListener("mousemove", (ev) => {
+      if (!overview) return;
+      const img = $("map-img");
+      const rect = img.getBoundingClientRect();
+      const x = (ev.clientX - rect.left) * (img.naturalWidth / rect.width);
+      const y = (ev.clientY - rect.top) * (img.naturalHeight / rect.height);
+      hoverCell = overview.cells.find((c) => x >= c.x && y >= c.y && x < c.x + c.w && y < c.y + c.h) || null;
+      drawMapGrid();
+    });
+    $("map-grid").addEventListener("click", () => {
+      if (hoverCell && cellSelectable(hoverCell)) {
+        openBlock(hoverCell.stem);
+      } else if (hoverCell && nhood === 9) {
+        $("status").textContent = "3×3 needs an interior tile (not on the map edge). Pick 1 tile, or click a tile with 8 neighbors.";
+      }
+    });
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("resize", drawRoads);
+    window.addEventListener("keydown", (ev) => {
+      if (ev.code === "ShiftLeft") {
+        if (ev.target.matches && ev.target.matches("input, select, textarea") && !stretchFrom) return;
+        if (!ev.repeat) {
+          leftShift = true;
+          if (mode === "vertex") drawRoads();
+        }
+        return;
+      }
+      if (ev.key === "Escape") {
+        if (draft.length) { cancelDraft(); return; }
+        if (selVerts.size) { selVerts = new Set(); renderSel(); drawRoads(); return; }
+        if (!$("map-overlay").classList.contains("hidden") && meta.open) hideMap();
+        return;
+      }
+      if (!$("map-overlay").classList.contains("hidden")) return;
+      if (ev.target.matches("input, select, textarea")) return;
+      if ((ev.key === "Delete" || ev.key === "Backspace") && selVerts.size) {
+        ev.preventDefault();
+        deleteSelectedVerts();
+        return;
+      }
+      const k = ev.key.toLowerCase();
+      if (k === "enter" && draft.length >= 2) { ev.preventDefault(); finishDraft(); }
+      if (k === "v") setMode("pan");
+      if (k === "d") setMode("delete");
+      if (k === "r") setMode("vertex");
+      if (k === "z") { ev.preventDefault(); $("b-undo").click(); }
+      if (k === "s" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); $("b-save").click(); }
+    });
+    window.addEventListener("keyup", (ev) => {
+      if (ev.code !== "ShiftLeft") return;
+      leftShift = false;
+      if (stretchFrom || (mode === "vertex" && draft.length)) endStretch();
+      else if (mode === "vertex") drawRoads();
+    });
+    window.addEventListener("blur", () => {
+      leftShift = false;
+      if (stretchFrom || (mode === "vertex" && draft.length)) endStretch();
+    });
+
+    (async function init() {
+      $("status").textContent = "Building map overview…";
+      overview = await api("/api/overview");
+      $("map-img").src = "/overview.jpg?t=" + Date.now();
+      await new Promise((resolve, reject) => {
+        $("map-img").onload = resolve;
+        $("map-img").onerror = () => reject(new Error("overview failed"));
+      });
+      setNhood(9);
+      $("status").textContent = "Pick a tile on the map.";
+    })().catch((err) => { $("status").textContent = String(err); });
+  </script>
+</body>
+</html>

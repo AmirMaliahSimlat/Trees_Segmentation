@@ -1,0 +1,32 @@
+# Snap existing road centerlines onto OEM road/pavement evidence.
+# Does not train a new model. Does not merge OSM and TIGER.
+
+model:
+  hf_id: mfaytin/mask2former-satellite
+  tile_size: 512
+  overlap: 0.125
+
+evidence:
+  include_pavement: true
+  morph_close_px: 5
+
+snap:
+  search_m: 18
+  densify_m: 6
+  min_support: 0.35
+  min_width_m: 2.4
+  max_width_m: 36
+
+missing:
+  enabled: true
+  cover_extra_m: 6
+  min_length_m: 35
+  max_mean_width_m: 22
+
+osm_skip_fclass:
+  - footway
+  - path
+  - steps
+  - cycleway
+  - bridleway
+  - pedestrian

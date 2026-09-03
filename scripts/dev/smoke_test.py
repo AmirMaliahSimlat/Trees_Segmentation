@@ -13,7 +13,7 @@ from tree_seg.metrics import binary_confusion
 from tree_seg.postprocess import export_polygons
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "outputs" / "smoke"
 OUT.mkdir(parents=True, exist_ok=True)
 

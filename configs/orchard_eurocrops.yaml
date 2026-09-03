@@ -1,0 +1,40 @@
+# Orchard-block SegFormer trained on EuroCrops parcels + ~25–30 cm RGB.
+# Isolated from tree canopy (oam_tcd_30cm) and from the NAIP+CDL orchard_blocks run.
+
+model:
+  name: restor/tcd-segformer-mit-b5
+  num_labels: 2
+  id2label:
+    0: background
+    1: orchard
+
+train:
+  image_size: 512
+  batch_size: 2
+  epochs: 12
+  learning_rate: 3.0e-5
+  weight_decay: 0.01
+  dice_weight: 1.0
+  bce_weight: 1.0
+  num_workers: 0
+  val_fraction: 0.0
+  seed: 42
+  early_stopping_patience: 4
+  checkpoint_dir: outputs/checkpoints/orchard_eurocrops
+
+predict:
+  tile_size: 1024
+  overlap: 0.25
+  threshold: 0.5
+  match_train_gsd: false
+  train_gsd_m: 0.30
+  native_gsd_m: 0.24
+
+postprocess:
+  threshold: 0.5
+  min_area_m2: 50.0
+  morph_open_px: 3
+  morph_close_px: 7
+  write_clean_mask: false
+  write_geojson: false
+  per_tile_folder: true

@@ -23,9 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _default_paths() -> dict[str, str]:
     return {
-        "raw": str(REPO_ROOT / "data" / "raw" / "GFK"),
-        "session": str(REPO_ROOT / "data" / "review"),
-        "dataset": str(REPO_ROOT / "data" / "tiles"),
+        "raw": str(REPO_ROOT / "data" / "GFK" / "Imagery"),
+        "session": str(REPO_ROOT / "data" / "GFK" / "Review"),
+        "dataset": str(REPO_ROOT / "data" / "shared" / "tiles"),
         "checkpoints": str(REPO_ROOT / "outputs" / "checkpoints" / "gfk_finetune"),
         "config": str(REPO_ROOT / "configs" / "default.yaml"),
     }
@@ -58,7 +58,7 @@ def build_app(
         gr.Markdown(
             """
             # Tree canopy review
-            1. Put tiles in `data/raw/`
+            1. Put tiles in `data/<map>/Imagery/`
             2. Click **Run batch predict**
             3. Review each tile — toggle mask, mark **Correct** or **Incorrect**
             4. If incorrect, edit the mask (paint tree = white) and **Save correction**

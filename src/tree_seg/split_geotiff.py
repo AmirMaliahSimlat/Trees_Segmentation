@@ -24,6 +24,17 @@ def _is_mostly_empty(data: np.ndarray, nodata: float | None, empty_frac: float) 
     return float(mask.mean()) >= empty_frac
 
 
+def _existing_tile_ok(path: Path, height: int, width: int) -> bool:
+    """True if ``path`` opens as a GeoTIFF with the expected dimensions."""
+    if not path.is_file() or path.stat().st_size < 1024:
+        return False
+    try:
+        with rasterio.open(path) as ds:
+            return ds.height == height and ds.width == width
+    except Exception:
+        return False
+
+
 def split_geotiff(
     input_path: str | Path,
     output_dir: str | Path,
@@ -34,12 +45,15 @@ def split_geotiff(
     skip_empty: bool = True,
     empty_frac: float = 0.99,
     prefix: str | None = None,
+    resume: bool = True,
 ) -> dict[str, Any]:
     """
     Cut ``input_path`` into ``tile_size``×``tile_size`` GeoTIFF tiles.
 
     Reads and writes window-by-window so a multi‑GB orthomosaic does not need
     to fit in RAM. Returns a summary dict (also written as ``manifest.json``).
+
+    When ``resume`` is True (default), valid existing tiles are kept and skipped.
     """
     if tile_size < 64:
         raise ValueError("tile_size must be >= 64")
@@ -54,6 +68,7 @@ def split_geotiff(
 
     written: list[dict[str, Any]] = []
     skipped = 0
+    resumed = 0
 
     with rasterio.open(input_path) as src:
         height, width = src.height, src.width
@@ -92,14 +107,28 @@ def split_geotiff(
                 specs.append((r, c, h, w))
 
         for r, c, h, w in tqdm(specs, desc=f"Split {input_path.name}", unit="tile"):
+            name = f"{prefix}_r{r:05d}_c{c:05d}.tif"
+            out_path = output_dir / name
+            tile_meta = {
+                "file": name,
+                "row_off": r,
+                "col_off": c,
+                "height": h,
+                "width": w,
+            }
+            if resume and _existing_tile_ok(out_path, h, w):
+                resumed += 1
+                written.append(tile_meta)
+                continue
+
             window = Window(c, r, w, h)
             data = src.read(window=window)
             if skip_empty and _is_mostly_empty(data, nodata, empty_frac):
+                if out_path.exists():
+                    out_path.unlink(missing_ok=True)
                 skipped += 1
                 continue
 
-            name = f"{prefix}_r{r:05d}_c{c:05d}.tif"
-            out_path = output_dir / name
             tile_profile = profile.copy()
             tile_profile.update(
                 {
@@ -120,22 +149,21 @@ def split_geotiff(
             if nodata is not None:
                 tile_profile["nodata"] = nodata
 
-            with rasterio.open(out_path, "w", **tile_profile) as dst:
+            # Atomic write so a crash does not leave a corrupt tile
+            tmp_path = out_path.with_suffix(".tif.tmp")
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            with rasterio.open(tmp_path, "w", **tile_profile) as dst:
                 dst.write(data)
                 for i in range(1, src.count + 1):
                     tags = src.tags(i)
                     if tags:
                         dst.update_tags(i, **tags)
+            if out_path.exists():
+                out_path.unlink(missing_ok=True)
+            tmp_path.replace(out_path)
 
-            written.append(
-                {
-                    "file": name,
-                    "row_off": r,
-                    "col_off": c,
-                    "height": h,
-                    "width": w,
-                }
-            )
+            written.append(tile_meta)
 
     summary = {
         "source": str(input_path.resolve()),
@@ -145,6 +173,7 @@ def split_geotiff(
         "source_height": height,
         "source_width": width,
         "tiles_written": len(written),
+        "tiles_resumed": resumed,
         "tiles_skipped_empty": skipped,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "tiles": written,

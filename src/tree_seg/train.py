@@ -96,6 +96,8 @@ def train_segformer(
     seed: int = 42,
     early_stopping_patience: int = 8,
     device: str | None = None,
+    num_labels: int = 2,
+    id2label: dict[int, str] | None = None,
 ) -> Path:
     """Fine-tune and save best checkpoint directory. Returns path to best model."""
     random.seed(seed)
@@ -143,7 +145,12 @@ def train_segformer(
             pin_memory=device_t.type == "cuda",
         )
 
-    bundle = load_segformer(model_name=model_name, device=str(device_t))
+    bundle = load_segformer(
+        model_name=model_name,
+        num_labels=num_labels,
+        id2label=id2label,
+        device=str(device_t),
+    )
     model: SegformerForSemanticSegmentation = bundle.model
     model.train()
 
@@ -220,6 +227,11 @@ def train_from_config(cfg: dict[str, Any], dataset_root: str | Path, output_dir:
     m = cfg.get("model", {})
     dataset_root = Path(dataset_root)
     output_dir = Path(output_dir or t.get("checkpoint_dir", "outputs/checkpoints"))
+    id2label = m.get("id2label")
+    if isinstance(id2label, dict):
+        id2label = {int(k): str(v) for k, v in id2label.items()}
+    else:
+        id2label = None
     return train_segformer(
         train_images=dataset_root / "train" / "images",
         train_masks=dataset_root / "train" / "masks",
@@ -227,6 +239,8 @@ def train_from_config(cfg: dict[str, Any], dataset_root: str | Path, output_dir:
         val_masks=dataset_root / "val" / "masks",
         output_dir=output_dir,
         model_name=m.get("name", "restor/tcd-segformer-mit-b5"),
+        num_labels=int(m.get("num_labels", 2)),
+        id2label=id2label,
         image_size=int(t.get("image_size", 512)),
         batch_size=int(t.get("batch_size", 2)),
         epochs=int(t.get("epochs", 30)),

@@ -1,0 +1,45 @@
+# Ground vs object (OpenEarthMap Mask2Former) + LaMa inpaint.
+# Isolated from tree / orchard / roof checkpoints.
+
+model:
+  hf_id: mfaytin/mask2former-satellite
+  tile_size: 512
+  overlap: 0.125
+  object_labels:
+    - tree
+    - building
+    - Tree
+    - Building
+
+inpaint:
+  backend: patchmatch
+  # Local: patchmatch | lama | opencv | sdxl | hybrid
+  # Online: stability  (Erase API only; 5 credits per call, max ~4 MP per image)
+  # stability_max_pixels: 3686400
+  # stability_grow_mask: 0
+  # stability_allow_tile: false
+  # Barnes CAF on per-object crops; LaMa if the crop is huge or has little ground.
+  patch_size: 7
+  patchmatch_max_px: 320
+  patchmatch_min_source: 0.18
+  dilate_px: 12
+  tile_size: 1024
+  overlap: 0.125
+  shadow_grow_px: 96
+  shadow_luma_ratio: 0.55
+  lift_context: true
+  relight: false
+  per_object: true
+  object_pad_px: 96
+  split_erode_px: 12
+
+output:
+  checkpoint_note: "Does not write to outputs/checkpoints/oam_tcd_30cm, orchard_*, or roof_types"
+
+# Full-map OSGeo TMS (global-geodetic) next to bare/ and objects/ GeoTIFFs.
+tms:
+  enabled: true
+  min_zoom: 0
+  tile_size: 256
+  block_tiles: 16
+  workers: 1

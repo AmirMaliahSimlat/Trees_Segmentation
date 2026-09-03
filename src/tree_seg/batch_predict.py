@@ -112,6 +112,7 @@ def predict_tile_to_session(
             train_gsd_m=float(pcfg.get("train_gsd_m", 0.10)),
             native_gsd_m=pcfg.get("native_gsd_m"),
             stem=tile_id,
+            write_proba=bool(pcfg.get("write_proba", True)),
         )
         with open_rgb_geotiff(path) as ds:
             rgb_full = read_rgb(ds)

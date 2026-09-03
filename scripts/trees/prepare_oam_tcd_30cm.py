@@ -120,7 +120,7 @@ def main() -> None:
         "-o",
         "--output",
         type=Path,
-        default=Path("data/oam_tcd_30cm"),
+        default=Path("data/shared/datasets/oam_tcd_30cm"),
         help="Output dataset root",
     )
     parser.add_argument("--max-train", type=int, default=None, help="Optional cap on train tiles")

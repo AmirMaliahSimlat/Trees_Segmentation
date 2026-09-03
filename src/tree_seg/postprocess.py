@@ -39,16 +39,24 @@ def mask_to_polygons(
     *,
     min_area_m2: float = 5.0,
     pixel_size_m: float | None = None,
+    connectivity: int = 8,
 ) -> gpd.GeoDataFrame:
-    """Polygonize binary mask; filter by approximate ground area in m^2."""
+    """Polygonize binary mask; filter by approximate ground area in m^2.
+
+    ``connectivity=8`` keeps corner-touching pixels in the same polygon (matches
+    OpenCV 8-connected blobs). GDAL/rasterio default is 4, which splits diagonal joins.
+    """
     mask_bool = mask.astype(bool)
     gsd = pixel_size_m if pixel_size_m is not None else float(max(abs(transform.a), abs(transform.e)))
     px_area_m2 = gsd * gsd
     transform_px_area = max(abs(transform.a * transform.e), 1e-12)
+    conn = 8 if int(connectivity) == 8 else 4
 
     geoms = []
     areas = []
-    for geom, val in features.shapes(mask.astype(np.uint8), mask=mask_bool, transform=transform):
+    for geom, val in features.shapes(
+        mask.astype(np.uint8), mask=mask_bool, transform=transform, connectivity=conn
+    ):
         if int(val) == 0:
             continue
         poly = shape(geom)
@@ -222,8 +230,9 @@ def export_map_footprints(
         paths = export_from_config(mask_path, output_dir, cfg)
         tile_paths.append(paths["shapefile"])
 
+    combined = output_dir / f"{map_name}_tree_footprints.shp"
     merged = merge_footprint_shapefiles(output_dir, combined)
-    return {"map_shapefile": merged, "n_tiles": len(tile_paths)}
+    return {"map_shapefile": merged, "n_tiles": len(tile_paths), "tile_shapefiles": tile_paths}
 
 
 def export_from_config(mask_path: str | Path, output_dir: str | Path, cfg: dict[str, Any]) -> dict[str, Path]:

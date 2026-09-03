@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("data/oam_tcd_30cm"),
+        default=Path("data/shared/datasets/oam_tcd_30cm"),
     )
     parser.add_argument(
         "--output",

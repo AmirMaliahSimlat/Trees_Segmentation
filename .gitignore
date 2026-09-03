@@ -14,16 +14,27 @@ venv/
 *.TIF
 *.TIFF
 !data/**/.gitkeep
-data/raw/*
-!data/raw/.gitkeep
-data/tiles/*
-!data/tiles/.gitkeep
-data/annotations/*
-!data/annotations/.gitkeep
-data/review/*
-!data/review/.gitkeep
-data/oam_tcd_30cm/*
-!data/oam_tcd_30cm/.gitkeep
+# Map folders: keep structure, ignore contents
+data/Fort_Riley/**
+!data/Fort_Riley/**/
+!data/Fort_Riley/**/.gitkeep
+data/GFK/**
+!data/GFK/**/
+!data/GFK/**/.gitkeep
+data/Nablus/**
+!data/Nablus/**/
+!data/Nablus/**/.gitkeep
+# Shared training / third-party dumps
+data/shared/datasets/**
+!data/shared/datasets/**/
+!data/shared/datasets/.gitkeep
+!data/shared/datasets/**/.gitkeep
+data/shared/sources/**
+!data/shared/sources/.gitkeep
+data/shared/tiles/*
+!data/shared/tiles/.gitkeep
+data/shared/annotations/*
+!data/shared/annotations/.gitkeep
 outputs/*
 !outputs/.gitkeep
 *.pt
@@ -31,3 +42,4 @@ outputs/*
 *.ckpt
 .DS_Store
 Thumbs.db
+.ipynb_checkpoints/

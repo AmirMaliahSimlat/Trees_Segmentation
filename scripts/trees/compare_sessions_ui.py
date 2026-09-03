@@ -11,9 +11,9 @@ from PIL import Image
 
 from tree_seg.review_store import overlay_rgb
 
-REPO = Path(__file__).resolve().parents[1]
-BEFORE = REPO / "data" / "review_pretrained"
-AFTER = REPO / "data" / "review"
+REPO = Path(__file__).resolve().parents[2]
+BEFORE = REPO / "data" / "GFK" / "Review" / "pretrained"
+AFTER = REPO / "data" / "GFK" / "Review"
 
 
 def _load_rgb_mask(session: Path, tile_id: str) -> tuple[np.ndarray, np.ndarray]:

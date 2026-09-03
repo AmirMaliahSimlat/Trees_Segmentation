@@ -43,6 +43,11 @@ tree-seg-export-map = "tree_seg.cli:export_map_shapefile_main"
 tree-seg-batch-predict = "tree_seg.cli:batch_predict_main"
 tree-seg-split-geotiff = "tree_seg.cli:split_geotiff_main"
 tree-seg-review = "tree_seg.cli:review_ui_main"
+tree-seg-water-edit = "tree_seg.water_edit_ui:main"
+tree-seg-road-edit = "tree_seg.road_edit_ui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+tree_seg = ["water_edit.html", "road_edit.html"]

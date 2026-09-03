@@ -163,7 +163,7 @@ def merge_shapefiles_main(argv: list[str] | None = None) -> None:
         "-o",
         type=Path,
         required=True,
-        help="Output combined .shp path (e.g. outputs/footprints/GFK/GFK_tree_footprints.shp)",
+        help="Output combined .shp path (e.g. outputs/footprints/GFK/trees/GFK_tree_footprints.shp)",
     )
     parser.add_argument(
         "--dissolve",
@@ -188,14 +188,14 @@ def export_map_shapefile_main(argv: list[str] | None = None) -> None:
         "-i",
         type=Path,
         required=True,
-        help="Folder of *_tree_mask.tif files (e.g. data/review/geotiff_masks)",
+        help="Folder of *_tree_mask.tif files (e.g. data/GFK/Review/geotiff_masks)",
     )
     parser.add_argument(
         "--output",
         "-o",
         type=Path,
         required=True,
-        help="Output map folder (e.g. outputs/footprints/GFK)",
+        help="Output map folder (e.g. outputs/footprints/GFK/trees)",
     )
     parser.add_argument(
         "--map-name",
@@ -226,12 +226,17 @@ def batch_predict_main(argv: list[str] | None = None) -> None:
         "--session",
         type=Path,
         default=None,
-        help="Review session directory (default: data/review)",
+        help="Review session directory (default: data/GFK/Review)",
     )
     parser.add_argument(
         "--no-skip",
         action="store_true",
         help="Re-predict tiles even if already in the session",
+    )
+    parser.add_argument(
+        "--full-resolution",
+        action="store_true",
+        help="Run full tiled GeoTIFF inference (needed for accurate shapefile export)",
     )
     args = parser.parse_args(argv)
 
@@ -245,13 +250,14 @@ def batch_predict_main(argv: list[str] | None = None) -> None:
         device=args.device,
     )
     root = Path(__file__).resolve().parents[2]
-    session_dir = args.session or (root / "data" / "review")
+    session_dir = args.session or (root / "data" / "GFK" / "Review")
     session = batch_predict_folder(
         args.input,
         session_dir,
         bundle,
         cfg,
         skip_existing=not args.no_skip,
+        full_resolution=args.full_resolution,
     )
     print(summarize_session(session))
     print(f"Session: {session_dir}")
@@ -295,7 +301,8 @@ def split_geotiff_main(argv: list[str] | None = None) -> None:
     )
     print(
         f"Wrote {summary['tiles_written']} tiles "
-        f"({summary['tiles_skipped_empty']} empty skipped) → {args.output}"
+        f"({summary.get('tiles_resumed', 0)} resumed, "
+        f"{summary['tiles_skipped_empty']} empty skipped) → {args.output}"
     )
     print(f"Manifest: {Path(args.output) / 'manifest.json'}")
 
