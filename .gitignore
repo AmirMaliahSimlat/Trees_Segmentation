@@ -37,6 +37,7 @@ data/shared/annotations/*
 !data/shared/annotations/.gitkeep
 outputs/*
 !outputs/.gitkeep
+Roads Gallery/
 *.pt
 *.pth
 *.ckpt

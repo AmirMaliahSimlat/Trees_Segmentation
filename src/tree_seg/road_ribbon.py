@@ -80,8 +80,6 @@ class RibbonParams:
     junction_max_m: float = 50.0
     junction_snap_m: float = 1.5
     junction_min_arms: int = 3
-    # Inner-edge intersection may sit this far from the hub (half-width / sin(θ/2)).
-    junction_gore_m: float = 40.0
     # Opt-in. With this off every line keeps one width end to end. When on, the
     # line keeps one base width and a stretch that holds a different width for
     # at least dyn_min_run_m overrides it there, its neighbours staying at base.
@@ -1156,11 +1154,6 @@ def _cluster_points(points: list[Point], snap: float) -> list[Point]:
     return out
 
 
-def _endpoint_on_line(a: LineString, b: LineString, snap: float) -> Point | None:
-    found = _endpoints_on_line(a, b, snap)
-    return found[0] if found else None
-
-
 def _endpoints_on_line(a: LineString, b: LineString, snap: float) -> list[Point]:
     """Every endpoint of a or b that sits on/near the other line."""
     out: list[Point] = []
@@ -1259,23 +1252,8 @@ def _n_distinct_headings(headings: list[float], min_deg: float = 40.0) -> int:
     return len(_kept_headings(headings, min_deg))
 
 
-def _ang_diff(a: float, b: float) -> float:
-    d = abs(a - b) % (2.0 * np.pi)
-    return float(min(d, 2.0 * np.pi - d))
-
-
 def _ccw_delta(a: float, b: float) -> float:
     return float((b - a) % (2.0 * np.pi))
-
-
-def _intersect_lines(
-    px: float, py: float, ux: float, uy: float, qx: float, qy: float, vx: float, vy: float
-) -> tuple[float, float] | None:
-    det = ux * vy - uy * vx
-    if abs(det) < 1e-10:
-        return None
-    t = ((qx - px) * vy - (qy - py) * vx) / det
-    return px + t * ux, py + t * uy
 
 
 def _geom_points(geom) -> list[Point]:
@@ -1310,14 +1288,6 @@ def _ray_hit(poly, x: float, y: float, dx: float, dy: float, min_m: float, max_m
         return None
     origin = Point(x, y)
     return min(pts, key=lambda q: origin.distance(q))
-
-
-def _pavement_at(rgb: np.ndarray, x: float, y: float, transform) -> np.ndarray | None:
-    col, row = _world_to_colrow(x, y, transform)
-    gp = _sample_nn(rgb, col, row)
-    if gp is None or _not_road_rgb(gp):
-        return None
-    return gp
 
 
 def _like_proto(
@@ -1374,57 +1344,6 @@ def _walk_dir(
         return p.min_half_m
     c, r, dc, dr = _px_offset(x, y, dx / ln, dy / ln, transform)
     return _walk_half(rgb, lab, c, r, dc, dr, proto, gsd, max_m, p)
-
-
-def _notch_proto(
-    rgb: np.ndarray,
-    lab: np.ndarray,
-    transform,
-    cx: float,
-    cy: float,
-    bx: float,
-    by: float,
-    local_poly: Polygon,
-) -> np.ndarray | None:
-    samples: list[np.ndarray] = []
-    for t in (0.9, 1.6, 2.4):
-        x, y = cx - bx * t, cy - by * t
-        if not Point(x, y).within(local_poly):
-            continue
-        col, row = _world_to_colrow(x, y, transform)
-        lp = _sample_nn(lab, col, row)
-        gp = _sample_nn(rgb, col, row)
-        if lp is None or gp is None or _not_road_rgb(gp):
-            continue
-        samples.append(lp.astype(np.float32))
-    if not samples:
-        return None
-    return np.mean(np.stack(samples, axis=0), axis=0)
-
-
-def _param_reach(a: float, b: float, k: float, t: float, ux: float, uy: float, vx: float, vy: float) -> float:
-    c, s = float(np.cos(t)), float(np.sin(t))
-    c = max(c, 0.0) ** k
-    s = max(s, 0.0) ** k
-    px = a * c * ux + b * s * vx
-    py = a * c * uy + b * s * vy
-    return float((px * px + py * py) ** 0.5)
-
-
-def _fit_pinch(a: float, b: float, r45: float, ux: float, uy: float, vx: float, vy: float) -> float:
-    """k=1 is a quarter-ellipse (rounder); k=3 is an astroid (pinched)."""
-    lo, hi = 1.0, 4.0
-    if _param_reach(a, b, lo, 0.25 * np.pi, ux, uy, vx, vy) <= r45 + 0.05:
-        return lo
-    if _param_reach(a, b, hi, 0.25 * np.pi, ux, uy, vx, vy) >= r45 - 0.05:
-        return hi
-    for _ in range(12):
-        mid = 0.5 * (lo + hi)
-        if _param_reach(a, b, mid, 0.25 * np.pi, ux, uy, vx, vy) > r45:
-            lo = mid
-        else:
-            hi = mid
-    return 0.5 * (lo + hi)
 
 
 def _wedge_dirs(
@@ -1976,7 +1895,6 @@ def _junction_quarter_poly(
     transform,
     gsd: float,
     p: RibbonParams,
-    local,
     cx: float,
     cy: float,
     ux: float,
@@ -2057,30 +1975,22 @@ def _junction_astroid_rows(
     max_w = np.deg2rad(165.0)
     for pt in _contact_points(parts, snap):
         arms = _arms_at_point(parts, pt, arm_m, snap)
-        tagged: list[tuple[float, int, Any, float, LineString]] = []
+        tagged: list[tuple[float, int, Any]] = []
         for idx, arm in arms:
             if idx < 0 or idx >= len(ribbons):
                 continue
             poly = _ribbon_poly(ribbons[idx])
             if poly is None:
                 continue
-            h = _arm_heading(arm, pt)
-            w = float(ribbons[idx].get("width_m") or 7.0)
-            tagged.append((h, idx, poly, w, parts[idx]))
+            tagged.append((_arm_heading(arm, pt), idx, poly))
         if len(tagged) < 2:
             continue
         tagged.sort(key=lambda t: t[0])
-        nearby = [
-            r["geometry"]
-            for r in ribbons
-            if r.get("geometry") is not None and not r["geometry"].is_empty and r["geometry"].distance(pt) <= 24.0
-        ]
-        local = make_valid(unary_union(nearby)) if nearby else None
         n_here = 0
         n_tag = len(tagged)
         for i in range(n_tag):
-            h1, i1, poly1, w1, seed1 = tagged[i]
-            h2, i2, poly2, w2, seed2 = tagged[(i + 1) % n_tag]
+            h1, i1, poly1 = tagged[i]
+            h2, i2, poly2 = tagged[(i + 1) % n_tag]
             wedge = _ccw_delta(h1, h2)
             if wedge < min_w or wedge > max_w:
                 continue
@@ -2134,7 +2044,6 @@ def _junction_astroid_rows(
                 transform,
                 gsd,
                 p,
-                local,
                 cx,
                 cy,
                 u[0],
@@ -2195,13 +2104,11 @@ def ribbons_for_gdf(
     gsd: float,
     p: RibbonParams | None = None,
     cleaner: CorridorCleaner | None = None,
-    examples: list[dict[str, Any]] | None = None,
 ) -> gpd.GeoDataFrame:
     p = p or RibbonParams()
     lab = cv2.cvtColor(rgb[:, :, ::-1], cv2.COLOR_BGR2LAB)
     rows: list[dict[str, Any]] = []
     src_parts: list[LineString] = []
-    src_widths: list[float] = []
     pending: list[tuple[int, LineString, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = []
     all_parts: list[LineString] = []
     for rec in gdf.itertuples(index=False):
@@ -2239,43 +2146,21 @@ def ribbons_for_gdf(
                 row["skip_pct"] = naive.get("skip_pct", 0)
             if cleaner is not None and _needs_clean(skipped, float(part.length), p):
                 pending.append((len(rows), part, row, naive, skipped))
-            elif examples is not None and w_naive is not None and w_skip is not None and w_skip >= w_naive + p.min_widen_m:
-                examples.append(
-                    {
-                        "kind": "idea1",
-                        "line": part,
-                        "name": row["name"],
-                        "fclass": row["fclass"],
-                        "length_m": row["length_m"],
-                        "w_naive": w_naive,
-                        "w_skip": w_skip,
-                        "w_clean": None,
-                        "naive_geom": naive["geometry"] if naive else None,
-                        "skip_geom": skipped["geometry"] if skipped else None,
-                        "clean_geom": None,
-                        "crops": [],
-                    }
-                )
             rows.append(row)
             src_parts.append(part)
-            src_widths.append(float(row.get("width_m") or 0.0))
         if (i + 1) % 50 == 0:
             print(f"  ribbon {i + 1}/{len(gdf)}", flush=True)
     if pending and cleaner is not None:
         work = rgb.copy()
-        crop_map: dict[int, list[dict[str, Any]]] = {}
         print(f"  clean corridors {len(pending)}", flush=True)
         for k, (idx, part, row, naive, skipped) in enumerate(pending):
             half = 0.5 * float((skipped or naive or row).get("width_m") or 5.0)
-            crop_map[idx] = paste_clean_corridor(work, rgb, part, transform, gsd, half, p, cleaner)
+            paste_clean_corridor(work, rgb, part, transform, gsd, half, p, cleaner)
             if (k + 1) % 5 == 0 or k + 1 == len(pending):
                 print(f"    cleaned {k + 1}/{len(pending)}", flush=True)
         work_lab = cv2.cvtColor(work[:, :, ::-1], cv2.COLOR_BGR2LAB)
         for idx, part, row, naive, skipped in pending:
             after = ribbon_for_line(part, work, work_lab, transform, gsd, p, skip_not_road=True, hubs=hubs)
-            w_naive = row.get("w_naive")
-            w_skip = row.get("w_skip")
-            used_clean = False
             if after is not None and _paved_frac(work, part, transform, strict=True) >= 0.5:
                 before = skipped or naive
                 if before is None or _accept_clean(before, after, p):
@@ -2285,52 +2170,6 @@ def ribbons_for_gdf(
                     row.update(after)
                     row["w_clean"] = round(float(after["width_m"]), 2)
                     row["method"] = "clean"
-                    used_clean = True
-            if examples is None:
-                continue
-            if used_clean:
-                crops = crop_map.get(idx, [])
-                best = max(crops, key=lambda c: int(c.get("n_obj") or 0)) if crops else None
-                if best is not None:
-                    best = {
-                        "rgb": best["rgb"],
-                        "clean": best["clean"],
-                        "box": best["box"],
-                        "n_obj": best["n_obj"],
-                    }
-                examples.append(
-                    {
-                        "kind": "idea2",
-                        "line": part,
-                        "name": row["name"],
-                        "fclass": row["fclass"],
-                        "length_m": row["length_m"],
-                        "w_naive": w_naive,
-                        "w_skip": w_skip,
-                        "w_clean": row.get("w_clean"),
-                        "naive_geom": None if naive is None else naive.get("geometry"),
-                        "skip_geom": None if skipped is None else skipped.get("geometry"),
-                        "clean_geom": row.get("geometry"),
-                        "crops": [] if best is None else [best],
-                    }
-                )
-            elif w_naive is not None and w_skip is not None and float(w_skip) >= float(w_naive) + p.min_widen_m:
-                examples.append(
-                    {
-                        "kind": "idea1",
-                        "line": part,
-                        "name": row["name"],
-                        "fclass": row["fclass"],
-                        "length_m": row["length_m"],
-                        "w_naive": w_naive,
-                        "w_skip": w_skip,
-                        "w_clean": None,
-                        "naive_geom": None if naive is None else naive.get("geometry"),
-                        "skip_geom": None if skipped is None else skipped.get("geometry"),
-                        "clean_geom": None,
-                        "crops": [],
-                    }
-                )
     if src_parts:
         rows.extend(_junction_astroid_rows(src_parts, rows, rgb, lab, transform, gsd, p))
     if not rows:

@@ -9,13 +9,13 @@ from pathlib import Path
 import cv2
 import geopandas as gpd
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tree_seg.io_geotiff import open_rgb_geotiff, pixel_size_m, read_rgb, write_geotiff
+from tree_seg.io_geotiff import open_rgb_geotiff, read_rgb, write_geotiff
 from tree_seg.road_ribbon import merge_touching_ribbons, rasterize_ribbons
 from fort_riley_ribbon_runs import EDIT, RUNS, STEM
 
@@ -34,12 +34,7 @@ def log(msg: str) -> None:
 
 def _write_shp(gdf: gpd.GeoDataFrame, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    candidates = [path]
-    for extra in (
-        "_v2", "_v3", "_v4", "_v5", "_v6", "_v7", "_v8", "_v9", "_v10",
-        "_v11", "_v12", "_v13", "_v14", "_v15", "_v16", "_v17", "_v18",
-    ):
-        candidates.append(path.with_name(path.stem + extra + path.suffix))
+    candidates = [path] + [path.with_name(f"{path.stem}_v{i}{path.suffix}") for i in range(2, 21)]
     last_err: PermissionError | None = None
     for dest in candidates:
         try:
@@ -140,18 +135,6 @@ def main() -> int:
         im = Image.fromarray(vis)
         im.thumbnail((2560, 2560), Image.Resampling.BILINEAR)
         im.save(out / f"{STEM}_union_overlay.jpg", quality=88)
-        windows = [(1539, 7055, 1280, "nbhd"), (1761, 5454, 1280, "long"), (2384, 7722, 1280, "yards")]
-        for i, (x0, y0, size, name) in enumerate(windows, start=1):
-            x0 = int(np.clip(x0, 0, w - size))
-            y0 = int(np.clip(y0, 0, h - size))
-            crop = vis[y0 : y0 + size, x0 : x0 + size]
-            bar = Image.new("RGB", (crop.shape[1], 28), (18, 18, 18))
-            ImageDraw.Draw(bar).text((8, 6), f"{run['name']} union {name}  yellow=merged outline  cyan=edit line", fill=(230, 230, 230))
-            canvas = Image.new("RGB", (crop.shape[1], crop.shape[0] + 28))
-            canvas.paste(bar, (0, 0))
-            canvas.paste(Image.fromarray(crop), (0, 28))
-            canvas.save(out / f"{STEM}_union_crop{i}.jpg", quality=90)
-            log(f"[{run['name']}] crop {i} {name} x{x0} y{y0}")
         log(f"[{run['name']}] wrote {shp}")
     return rc
 
