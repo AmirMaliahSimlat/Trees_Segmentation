@@ -89,10 +89,6 @@
       <button id="b-del" data-mode="delete" title="Click a line to delete it (D)">Delete</button>
       <button id="b-vertex" data-mode="vertex" title="Edit vertices. Hold Left Shift to draw or stretch. Delete removes selected vertices (R)">Vertex</button>
       <button id="b-roads" class="active">Lines on</button>
-      <label>Min m <input id="min-m" type="number" min="1" step="1" value="12" /></label>
-      <button id="b-drop" title="Delete lines shorter than min m">Drop short</button>
-      <label>Join m <input id="join-m" type="number" min="1" step="1" value="8" /></label>
-      <button id="b-join" title="Join dangling ends within Join m">Join ends</button>
       <button id="b-undo">Undo</button>
       <button id="b-reset" class="danger">Reset</button>
       <button id="b-save" class="save">Save shapefile</button>
@@ -107,10 +103,12 @@
         <div id="sel-box">Click a line.</div>
         <p style="margin-top:16px">
           <kbd>V</kbd> pan <kbd>D</kbd> delete line <kbd>R</kbd> vertex<br>
-          Vertex: drag empty to box-select vertices, then drag them together or press Delete. Ctrl+drag adds to the selection.<br>
+          Pan: click a line to highlight it.<br>
+          Vertex: Alt+click a vertex in the middle of a line to split it there; the two pieces keep that point as a shared junction.<br>
+          Vertex: Ctrl+click the shared end vertex to weld two lines into one, including a line you drew onto an OSM/TIGER road. A vertex where a line continues through, or where three lines meet, stays split. The status bar says why if it refuses.<br>
+          Vertex: drag empty to box-select vertices, then drag them together or press Delete.<br>
           Click a segment to add a point. Yellow squares are shared junctions (same source only).<br>
           Hold Left Shift: click empty to draw a new line, or click a road to stretch a spur. Extra clicks pin points. Release Shift to finish.<br>
-          Drop short / Join ends are instant (they only change the overlay).<br>
           Right-drag pans in any tool.
         </p>
       </aside>
@@ -159,6 +157,7 @@
     let hoverCell = null;
     let nhood = 9;
     let panDrag = null;
+    let panPick = null;
     let vertexDrag = null;
     let groupDrag = null;
     let boxDrag = null;
@@ -203,6 +202,14 @@
       if (f.src === "tiger") return "tiger";
       if (f.src === "osm") return "osm";
       return "edit";
+    }
+
+    /** Manual lines may snap to the loaded map. OSM and TIGER stay apart. */
+    function canShareNet(a, b) {
+      const na = typeof a === "string" ? a : networkOf(a);
+      const nb = typeof b === "string" ? b : networkOf(b);
+      if (na === nb) return true;
+      return na === "edit" || nb === "edit";
     }
 
     function refreshIds() {
@@ -491,6 +498,152 @@
       afterEdit(true);
     }
 
+    function endsOf(f) {
+      return [
+        { i: 0, p: f.coords[0] },
+        { i: f.coords.length - 1, p: f.coords[f.coords.length - 1] },
+      ];
+    }
+
+    function isEndIndex(f, i) {
+      return i === 0 || i === f.coords.length - 1;
+    }
+
+    function mergeTolImg(pickTol) {
+      const metres = SHARE_M / (meta.gsd_m || 0.3);
+      return Math.max(pickTol || 0, metres, 2);
+    }
+
+    function endsNear(x, y, tol) {
+      const hits = [];
+      for (const f of roads) {
+        if (f.coords.length < 2) continue;
+        for (const e of endsOf(f)) {
+          const d = Math.hypot(e.p[0] - x, e.p[1] - y);
+          if (d <= tol) hits.push({ f, i: e.i, p: e.p, d });
+        }
+      }
+      return hits;
+    }
+
+    function vertsNear(x, y, tol) {
+      const hits = [];
+      for (const f of roads) {
+        f.coords.forEach((p, i) => {
+          const d = Math.hypot(p[0] - x, p[1] - y);
+          if (d <= tol) hits.push({ f, i, p, d, end: isEndIndex(f, i) });
+        });
+      }
+      return hits;
+    }
+
+    /** Two lines merge only where an end of one meets an end of the other and
+     *  nothing else touches that point: a junction stays a junction. */
+    function mergeInfo(a, b, x, y, tol) {
+      if (!a || !b) return { ok: false, why: "no second line here" };
+      if (a.id === b.id) return { ok: false, why: "pick two different lines" };
+      if (!canShareNet(a, b)) return { ok: false, why: "the two lines are from different sources" };
+      if (a.coords.length < 2 || b.coords.length < 2) return { ok: false, why: "a line has no segment" };
+      let best = null;
+      for (const ea of endsOf(a)) {
+        for (const eb of endsOf(b)) {
+          const da = Math.hypot(ea.p[0] - x, ea.p[1] - y);
+          const db = Math.hypot(eb.p[0] - x, eb.p[1] - y);
+          if (da > tol || db > tol) continue;
+          const d = Math.hypot(ea.p[0] - eb.p[0], ea.p[1] - eb.p[1]);
+          if (!best || d < best.d) best = { d, ea, eb };
+        }
+      }
+      if (!best) return { ok: false, why: "the two lines do not both end at that vertex" };
+      const jx = x;
+      const jy = y;
+      const extra = vertsNear(jx, jy, tol).filter((h) => h.f.id !== a.id && h.f.id !== b.id);
+      if (extra.length) {
+        const ids = [...new Set(extra.map((h) => h.f.id))].join(", ");
+        return { ok: false, why: `that vertex is an intersection (line ${ids} also meets it)` };
+      }
+      return { ok: true, ea: best.ea, eb: best.eb, jx, jy };
+    }
+
+    /** Ctrl+click the vertex where exactly two line ends meet: the pair becomes
+     *  one shared vertex inside one line. Three ends there is a junction. */
+    function mergeAtVertex(x, y, pickTol) {
+      const tol = mergeTolImg(pickTol);
+      const ends = endsNear(x, y, tol);
+      const ids = [...new Set(ends.map((h) => h.f.id))];
+      if (!ends.length) {
+        $("status").textContent = "Cannot merge: that vertex is not an endpoint. Ctrl+click the dangling end both lines share.";
+        return false;
+      }
+      if (ids.length < 2) {
+        const others = vertsNear(x, y, tol).filter((h) => h.f.id !== ids[0]);
+        if (others.length) {
+          $("status").textContent = "Cannot merge: the other line continues through this vertex, so it is not two dangling ends.";
+        } else {
+          $("status").textContent = "Cannot merge: only one line ends here.";
+        }
+        return false;
+      }
+      if (ids.length > 2) {
+        $("status").textContent = `Cannot merge: ${ids.length} lines end at that vertex, so it is an intersection.`;
+        return false;
+      }
+      const a0 = roads.find((r) => r.id === ids[0]);
+      const b0 = roads.find((r) => r.id === ids[1]);
+      const a = networkOf(a0) === "edit" && networkOf(b0) !== "edit" ? b0 : a0;
+      const b = a === a0 ? b0 : a0;
+      const info = mergeInfo(a, b, x, y, tol);
+      if (!info.ok) {
+        $("status").textContent = `Cannot merge: ${info.why}.`;
+        return false;
+      }
+      snapshot();
+      const ca = info.ea.i === 0 ? a.coords.slice().reverse() : a.coords.slice();
+      const cb = info.eb.i === 0 ? b.coords.slice() : b.coords.slice().reverse();
+      ca[ca.length - 1] = [info.jx, info.jy];
+      a.coords = ca.concat(cb.slice(1));
+      if (!a.name && b.name) a.name = b.name;
+      if (!a.fclass && b.fclass) a.fclass = b.fclass;
+      touchLength(a);
+      roads = roads.filter((r) => r.id !== b.id);
+      const gone = b.id;
+      selected = a.id;
+      selVerts = new Set();
+      afterEdit(true);
+      $("status").textContent = `Merged line ${gone} into line ${a.id}  ·  ${a.coords.length} vertices  ·  unsaved`;
+      return true;
+    }
+
+    /** Alt+click an interior vertex: that point becomes a shared end of two lines. */
+    function splitAtVertex(f, i) {
+      if (!f || f.coords.length < 3) {
+        $("status").textContent = "Cannot split: the line needs at least one vertex between its ends.";
+        return false;
+      }
+      if (i <= 0 || i >= f.coords.length - 1) {
+        $("status").textContent = "Cannot split: that vertex is already an end. Alt+click a vertex in the middle of the line.";
+        return false;
+      }
+      snapshot();
+      const pt = [f.coords[i][0], f.coords[i][1]];
+      const right = f.coords.slice(i).map((p) => [p[0], p[1]]);
+      f.coords = f.coords.slice(0, i + 1).map((p) => [p[0], p[1]]);
+      touchLength(f);
+      const g = makeFeat(nextId++, f.src, right, {
+        name: f.name,
+        fclass: f.fclass,
+        network: networkOf(f),
+        src_id: f.src_id,
+      });
+      roads.push(g);
+      selected = f.id;
+      selVerts = new Set();
+      weldAt(pt[0], pt[1], networkOf(f));
+      afterEdit(true);
+      $("status").textContent = `Split line ${f.id} at the vertex  ·  now lines ${f.id} and ${g.id}  ·  unsaved`;
+      return true;
+    }
+
     function shareTolImg() {
       const screen = viewer && viewer.viewport ? screenToImgPx(10) : 8;
       const maxPx = SHARE_M / (meta.gsd_m || 0.3);
@@ -540,12 +693,12 @@
     }
 
     function weldAt(x, y, network) {
-      const tol = shareTolImg();
+      const tol = mergeTolImg();
       const net = network || "edit";
       const members = [];
       let inserted = false;
       for (const f of roads) {
-        if (networkOf(f) !== net) continue;
+        if (!canShareNet(net, f)) continue;
         const hit = closestOnRoad(f, x, y);
         if (!hit || hit.d > tol) continue;
         const put = insertVertexOnRoad(f, hit.qx, hit.qy, tol);
@@ -591,7 +744,7 @@
               if (j === i) continue;
               const w = verts[j];
               if (w.id === v.id) continue;
-              if (w.network !== v.network) continue;
+              if (!canShareNet(v.network, w.network)) continue;
               if (Math.hypot(v.x - w.x, v.y - w.y) <= tol) {
                 shared[i] = 1;
                 return;
@@ -607,7 +760,7 @@
       const maxImg = screenToImgPx(14);
       const hit = hitRoad(x, y, maxImg);
       let v = hitVertex(x, y, maxImg);
-      if (v && hit && networkOf(v.f) !== networkOf(hit.f)) {
+      if (v && hit && !canShareNet(v.f, hit.f)) {
         const onHit = nearestVertexOnRoad(hit.f, x, y);
         if (onHit && onHit.d <= maxImg * 0.5) v = { f: hit.f, i: onHit.i, d: onHit.d, x: onHit.x, y: onHit.y };
         else v = null;
@@ -855,7 +1008,12 @@
         try { viewer.canvas.setPointerCapture(ev.pointerId); } catch (_) {}
         return;
       }
-      if (ev.button !== 0 || mode === "pan") return;
+      if (ev.button !== 0) return;
+      if (mode === "pan") {
+        // OpenSeadragon keeps the drag; a press that never drags picks a line.
+        panPick = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+        return;
+      }
       ev.preventDefault();
       ev.stopPropagation();
       const p = clientToImage(ev);
@@ -883,11 +1041,20 @@
         const onVert = v && v.d <= Math.max(maxImg * 0.5, 1);
         const picked = onVert && selVerts.has(vertKey(v.f.id, v.i));
         const additive = ev.ctrlKey || ev.metaKey;
+        if (ev.altKey) {
+          if (onVert) splitAtVertex(v.f, v.i);
+          else $("status").textContent = "Alt+click a vertex in the middle of a line to split it.";
+          renderSel();
+          drawRoads();
+          return;
+        }
         if (additive && onVert) {
-          const key = vertKey(v.f.id, v.i);
-          if (selVerts.has(key)) selVerts.delete(key);
-          else selVerts.add(key);
-        } else if (selVerts.size && (picked || (!onVert && !hitRoad(p.x, p.y, maxImg) && pointInSelBBox(p.x, p.y)))) {
+          mergeAtVertex(v.x, v.y, maxImg);
+          renderSel();
+          drawRoads();
+          return;
+        }
+        if (selVerts.size && (picked || (!onVert && !hitRoad(p.x, p.y, maxImg) && pointInSelBBox(p.x, p.y)))) {
           startGroupDrag(ev.pointerId, p.x, p.y, ev.clientX, ev.clientY);
         } else if (!beginVertexEdit(p.x, p.y, ev.pointerId, ev.clientX, ev.clientY)) {
           boxDrag = { pointerId: ev.pointerId, x0: p.x, y0: p.y, x1: p.x, y1: p.y, additive };
@@ -974,6 +1141,18 @@
 
     function onPointerUp(ev) {
       if (panDrag && ev.pointerId === panDrag.pointerId) panDrag = null;
+      if (panPick && ev.pointerId === panPick.pointerId) {
+        const pick = panPick;
+        panPick = null;
+        if (Math.hypot(ev.clientX - pick.x, ev.clientY - pick.y) <= 4) {
+          const p = clientToImage(ev);
+          const hit = hitRoad(p.x, p.y, screenToImgPx(14));
+          selected = hit ? hit.f.id : null;
+          renderSel();
+          drawRoads();
+        }
+        return;
+      }
       if (boxDrag && ev.pointerId === boxDrag.pointerId) {
         const box = boxDrag;
         boxDrag = null;
@@ -1186,47 +1365,6 @@
         return;
       }
       applyPayload(await api("/api/source", { source: $("source").value }));
-    });
-    $("b-drop").addEventListener("click", () => {
-      const minPx = Math.max(1, Number($("min-m").value) / (meta.gsd_m || 0.3));
-      snapshot();
-      roads = roads.filter((f) => (f.length_px || 0) >= minPx);
-      afterEdit(true);
-    });
-    $("b-join").addEventListener("click", () => {
-      const maxPx = Math.max(1, Number($("join-m").value) / (meta.gsd_m || 0.3));
-      snapshot();
-      const used = new Set();
-      const ends = [];
-      roads.forEach((f, i) => {
-        if (f.coords.length < 2) return;
-        ends.push({ i, s: 0, x: f.coords[0][0], y: f.coords[0][1], net: networkOf(f) });
-        ends.push({ i, s: -1, x: f.coords[f.coords.length - 1][0], y: f.coords[f.coords.length - 1][1], net: networkOf(f) });
-      });
-      for (let a = 0; a < ends.length; a++) {
-        const ea = ends[a];
-        if (used.has(ea.i)) continue;
-        let best = null, bestD = maxPx;
-        for (let b = a + 1; b < ends.length; b++) {
-          const eb = ends[b];
-          if (eb.i === ea.i || used.has(eb.i) || eb.net !== ea.net) continue;
-          const d = Math.hypot(ea.x - eb.x, ea.y - eb.y);
-          if (d < bestD) { bestD = d; best = eb; }
-        }
-        if (!best) continue;
-        const ca = roads[ea.i].coords.slice();
-        const cb = roads[best.i].coords.slice();
-        let merged;
-        if (ea.s === -1 && best.s === 0) merged = ca.concat(cb.slice(1));
-        else if (ea.s === -1 && best.s === -1) merged = ca.concat(cb.slice().reverse().slice(1));
-        else if (ea.s === 0 && best.s === -1) merged = cb.concat(ca.slice(1));
-        else merged = ca.slice().reverse().concat(cb.slice(1));
-        roads[ea.i].coords = merged;
-        roads[ea.i].length_px = Math.round(lengthPx(merged) * 10) / 10;
-        used.add(best.i);
-      }
-      roads = roads.filter((_, i) => !used.has(i));
-      afterEdit(true);
     });
     $("b-undo").addEventListener("click", () => {
       if (!undoStack.length) return;

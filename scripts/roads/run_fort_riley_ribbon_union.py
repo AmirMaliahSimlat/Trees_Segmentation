@@ -13,22 +13,20 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tree_seg.io_geotiff import open_rgb_geotiff, pixel_size_m, read_rgb, write_geotiff
 from tree_seg.road_ribbon import merge_touching_ribbons, rasterize_ribbons
+from fort_riley_ribbon_runs import EDIT, RUNS, STEM
 
-STEM = "FortRiley_r61440_c81920"
-IMG = ROOT / "outputs" / "ground_fill" / "Fort_Riley" / "bare" / f"{STEM}_bare.tif"
-EDIT = ROOT / "outputs" / "footprints" / "Fort_Riley" / "roads_edit" / f"{STEM}_edit.shp"
-COVER = ROOT / "outputs" / "footprints" / "Fort_Riley" / "ribbons without parking cleaned"
-SRC = COVER / f"{STEM}_ribbons.shp"
-OUT = COVER
-LOG = ROOT / "outputs" / "logs" / "roads_ribbon_cleaned_union.log"
+LOG: Path | None = None
 
 
 def log(msg: str) -> None:
     line = f"{datetime.now(timezone.utc).isoformat()}  {msg}"
     print(line, flush=True)
+    if LOG is None:
+        return
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
@@ -36,12 +34,23 @@ def log(msg: str) -> None:
 
 def _write_shp(gdf: gpd.GeoDataFrame, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        gdf.to_file(path, driver="ESRI Shapefile")
-    except PermissionError:
-        path = path.with_name(path.stem + "_new.shp")
-        gdf.to_file(path, driver="ESRI Shapefile")
-        log(f"shapefile locked; wrote {path.name}")
+    candidates = [path]
+    for extra in (
+        "_v2", "_v3", "_v4", "_v5", "_v6", "_v7", "_v8", "_v9", "_v10",
+        "_v11", "_v12", "_v13", "_v14", "_v15", "_v16", "_v17", "_v18",
+    ):
+        candidates.append(path.with_name(path.stem + extra + path.suffix))
+    last_err: PermissionError | None = None
+    for dest in candidates:
+        try:
+            gdf.to_file(dest, driver="ESRI Shapefile")
+            if dest != path:
+                log(f"shapefile locked; wrote {dest.name}")
+            return dest
+        except PermissionError as exc:
+            last_err = exc
+    if last_err is not None:
+        raise last_err
     return path
 
 
@@ -83,44 +92,68 @@ def _overlay(rgb: np.ndarray, mask: np.ndarray, polys: gpd.GeoDataFrame, lines: 
 
 
 def main() -> int:
-    if not SRC.is_file():
-        log(f"missing {SRC}")
-        return 1
-    OUT.mkdir(parents=True, exist_ok=True)
-    ribbons = gpd.read_file(SRC)
-    log(f"input ribbons {len(ribbons)}")
-    merged = merge_touching_ribbons(ribbons, snap_m=0.35)
-    log(f"merged polygons {len(merged)}  (connected components)")
-    if len(merged):
-        log(merged[["n_rib", "kind", "width_m", "area_m2"]].describe(include="all").to_string())
-    shp = _write_shp(merged, OUT / f"{STEM}_union.shp")
-    log(f"loading {IMG.name}")
-    with open_rgb_geotiff(IMG) as ds:
-        rgb = read_rgb(ds)
-        transform = ds.transform
-        crs = ds.crs
-        h, w = rgb.shape[:2]
-    mask = rasterize_ribbons(merged, (h, w), transform)
-    write_geotiff(OUT / f"{STEM}_union_mask.tif", mask.astype(np.uint8), transform, crs, dtype="uint8")
-    lines = gpd.read_file(EDIT).to_crs(crs) if EDIT.is_file() else gpd.GeoDataFrame(geometry=[], crs=crs)
-    vis = _overlay(rgb, mask, merged, lines, transform)
-    im = Image.fromarray(vis)
-    im.thumbnail((2560, 2560), Image.Resampling.BILINEAR)
-    im.save(OUT / f"{STEM}_union_overlay.jpg", quality=88)
-    windows = [(1539, 7055, 1280, "nbhd"), (1761, 5454, 1280, "long"), (2384, 7722, 1280, "yards")]
-    for i, (x0, y0, size, name) in enumerate(windows, start=1):
-        x0 = int(np.clip(x0, 0, w - size))
-        y0 = int(np.clip(y0, 0, h - size))
-        crop = vis[y0 : y0 + size, x0 : x0 + size]
-        bar = Image.new("RGB", (crop.shape[1], 28), (18, 18, 18))
-        ImageDraw.Draw(bar).text((8, 6), f"union {name}  yellow=merged outline  cyan=edit line", fill=(230, 230, 230))
-        canvas = Image.new("RGB", (crop.shape[1], crop.shape[0] + 28))
-        canvas.paste(bar, (0, 0))
-        canvas.paste(Image.fromarray(crop), (0, 28))
-        canvas.save(OUT / f"{STEM}_union_crop{i}.jpg", quality=90)
-        log(f"crop {i} {name} x{x0} y{y0}")
-    log(f"wrote {shp}")
-    return 0
+    global LOG
+    rc = 0
+    for run in RUNS:
+        LOG = run["log_union"]
+        img: Path = run["img"]
+        out: Path = run["out"]
+        src_candidates = [
+            out / f"{STEM}_ribbons.shp",
+            out / f"{STEM}_ribbons_new.shp",
+            out / f"{STEM}_ribbons_run.shp",
+            out / f"{STEM}_ribbons_run2.shp",
+        ]
+        existing = [p for p in src_candidates if p.is_file()]
+        if not existing:
+            log(f"[{run['name']}] missing {src_candidates[0]}")
+            rc = 1
+            continue
+        src = max(existing, key=lambda p: p.stat().st_mtime)
+        out.mkdir(parents=True, exist_ok=True)
+        ribbons = gpd.read_file(src)
+        log(f"[{run['name']}] input ribbons {len(ribbons)}")
+        merged = merge_touching_ribbons(ribbons, snap_m=0.35)
+        n_junc = int((ribbons["method"] == "junction").sum()) if "method" in ribbons.columns else 0
+        log(f"[{run['name']}] merged (junction astroid corners: {n_junc})")
+        log(f"[{run['name']}] merged polygons {len(merged)}  (connected components)")
+        if len(merged):
+            log(merged[["n_rib", "kind", "width_m", "area_m2"]].describe(include="all").to_string())
+        shp = _write_shp(merged, out / f"{STEM}_union.shp")
+        if "method" in ribbons.columns:
+            astro = ribbons[ribbons["method"] == "junction"].copy()
+            if len(astro):
+                ash = _write_shp(astro, out / f"{STEM}_astroids.shp")
+                astro_u = merge_touching_ribbons(astro, snap_m=0.35)
+                aush = _write_shp(astro_u, out / f"{STEM}_astroids_union.shp")
+                log(f"[{run['name']}] astroids {len(astro)} wrote {ash.name}; union {len(astro_u)} wrote {aush.name}")
+        log(f"[{run['name']}] loading {img.name}")
+        with open_rgb_geotiff(img) as ds:
+            rgb = read_rgb(ds)
+            transform = ds.transform
+            crs = ds.crs
+            h, w = rgb.shape[:2]
+        mask = rasterize_ribbons(merged, (h, w), transform)
+        write_geotiff(out / f"{STEM}_union_mask.tif", mask.astype(np.uint8), transform, crs, dtype="uint8")
+        lines = gpd.read_file(EDIT).to_crs(crs) if EDIT.is_file() else gpd.GeoDataFrame(geometry=[], crs=crs)
+        vis = _overlay(rgb, mask, merged, lines, transform)
+        im = Image.fromarray(vis)
+        im.thumbnail((2560, 2560), Image.Resampling.BILINEAR)
+        im.save(out / f"{STEM}_union_overlay.jpg", quality=88)
+        windows = [(1539, 7055, 1280, "nbhd"), (1761, 5454, 1280, "long"), (2384, 7722, 1280, "yards")]
+        for i, (x0, y0, size, name) in enumerate(windows, start=1):
+            x0 = int(np.clip(x0, 0, w - size))
+            y0 = int(np.clip(y0, 0, h - size))
+            crop = vis[y0 : y0 + size, x0 : x0 + size]
+            bar = Image.new("RGB", (crop.shape[1], 28), (18, 18, 18))
+            ImageDraw.Draw(bar).text((8, 6), f"{run['name']} union {name}  yellow=merged outline  cyan=edit line", fill=(230, 230, 230))
+            canvas = Image.new("RGB", (crop.shape[1], crop.shape[0] + 28))
+            canvas.paste(bar, (0, 0))
+            canvas.paste(Image.fromarray(crop), (0, 28))
+            canvas.save(out / f"{STEM}_union_crop{i}.jpg", quality=90)
+            log(f"[{run['name']}] crop {i} {name} x{x0} y{y0}")
+        log(f"[{run['name']}] wrote {shp}")
+    return rc
 
 
 if __name__ == "__main__":
