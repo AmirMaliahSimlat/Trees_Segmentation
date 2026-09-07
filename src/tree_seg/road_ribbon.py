@@ -26,6 +26,8 @@ those inner outlines from the outline crossing to the cusps; the outer lip
 is the fitted arc (k can be below 2 when the lip is round, or above 2 when
 it pinches in). A pair of lines can make more than one hub (split-merge
 island). A ~180° through-side is skipped.
+
+A T stem is cut at the bar's far curb so it cannot poke through.
 """
 
 from __future__ import annotations
@@ -607,6 +609,8 @@ def _ribbon_polygon(
     line: LineString,
     smooth_win: int = 1,
 ) -> Polygon | None:
+    """Tube from left/right offsets. Union of station quads so a self-crossing
+    line stays a ribbon (overlapping itself) instead of one invalid ring."""
     length = float(line.length)
     left_pts: list[tuple[float, float]] = []
     right_pts: list[tuple[float, float]] = []
@@ -616,19 +620,35 @@ def _ribbon_polygon(
         right_pts.append((x + nx * float(right_m[i]), y + ny * float(right_m[i])))
     left_pts = _smooth_open_pts(left_pts, smooth_win)
     right_pts = _smooth_open_pts(right_pts, smooth_win)
-    ring = left_pts + list(reversed(right_pts))
-    if len(ring) < 4:
+    if len(left_pts) < 2:
         return None
-    poly = Polygon(ring)
-    if not poly.is_valid:
-        poly = make_valid(poly)
-        if poly.geom_type == "MultiPolygon":
-            poly = max(poly.geoms, key=lambda g: g.area)
-        if poly.geom_type != "Polygon":
-            return None
-    if poly.is_empty or poly.area <= 0:
+    chunks: list = []
+    for i in range(len(left_pts) - 1):
+        ring = [left_pts[i], left_pts[i + 1], right_pts[i + 1], right_pts[i]]
+        quad = Polygon(ring)
+        if quad.is_empty or quad.area <= 1e-6:
+            continue
+        if not quad.is_valid:
+            quad = make_valid(quad)
+        chunks.extend(_polygon_parts(quad))
+    if not chunks:
         return None
-    return poly
+    merged = make_valid(unary_union(chunks))
+    try:
+        merged = make_valid(merged.buffer(0.04).buffer(-0.04))
+    except Exception:
+        pass
+    cleaned: list = []
+    for part in _polygon_parts(merged):
+        if part.area < 0.25:
+            continue
+        holes = [h for h in part.interiors if Polygon(h).area >= 0.4]
+        if len(holes) != len(part.interiors):
+            part = Polygon(part.exterior, holes)
+        cleaned.append(part)
+    if not cleaned:
+        return None
+    return cleaned[0] if len(cleaned) == 1 else unary_union(cleaned)
 
 
 def _seed_blocked(
@@ -1254,6 +1274,152 @@ def _n_distinct_headings(headings: list[float], min_deg: float = 40.0) -> int:
 
 def _ccw_delta(a: float, b: float) -> float:
     return float((b - a) % (2.0 * np.pi))
+
+
+def _ang_sep(a: float, b: float) -> float:
+    d = abs(a - b) % (2.0 * np.pi)
+    return float(min(d, 2.0 * np.pi - d))
+
+
+def _line_ends_near(line: LineString, pt: Point, near_m: float = 3.5) -> bool:
+    if line is None or line.is_empty:
+        return False
+    a = Point(line.coords[0])
+    b = Point(line.coords[-1])
+    return min(a.distance(pt), b.distance(pt)) <= near_m
+
+
+def _heading_from_hub(line: LineString, pt: Point) -> float | None:
+    """Heading from the hub along the longer leftover of the line (the real stem)."""
+    a = Point(line.coords[0])
+    b = Point(line.coords[-1])
+    far = a if a.distance(pt) >= b.distance(pt) else b
+    return float(np.arctan2(far.y - pt.y, far.x - pt.x)) if far.distance(pt) >= 0.2 else None
+
+
+def _t_junctions(
+    parts: list[LineString], p: RibbonParams
+) -> list[tuple[Point, int, list[int], float, float]]:
+    """T hubs: (pt, stem_idx, bar_idxs, stem_heading, bar_heading)."""
+    snap = p.junction_snap_m
+    arm_m = max(p.junction_arm_m, 2.0)
+    opp = np.deg2rad(140.0)
+    colinear = np.deg2rad(25.0)
+    found: list[tuple[Point, int, list[int], float, float]] = []
+    for pt in _contact_points(parts, snap):
+        arms = _arms_at_point(parts, pt, arm_m, snap)
+        tagged = [(_arm_heading(arm, pt), idx) for idx, arm in arms if 0 <= idx < len(parts)]
+        if len(tagged) < 2:
+            continue
+        idxs = sorted({idx for _, idx in tagged})
+        through = [i for i in idxs if not _line_ends_near(parts[i], pt)]
+        ending = [i for i in idxs if _line_ends_near(parts[i], pt)]
+        if len(through) >= 2:
+            continue
+        bar_idxs: list[int] = []
+        bar_h: float | None = None
+        stem_idxs: list[int] = []
+        if len(through) == 1 and ending:
+            bar_idxs = through
+            bar_arms = [h for h, i in tagged if i == through[0]]
+            bar_h = bar_arms[0] if bar_arms else _heading_from_hub(parts[through[0]], pt)
+            stem_idxs = ending
+        elif not through and len(ending) >= 3:
+            pairs: list[tuple[float, int, int, float, float]] = []
+            for i, (h1, i1) in enumerate(tagged):
+                for h2, i2 in tagged[i + 1 :]:
+                    sep = _ang_sep(h1, h2)
+                    if sep >= opp and i1 != i2:
+                        pairs.append((sep, i1, i2, h1, h2))
+            if not pairs:
+                continue
+            if len(pairs) >= 2 and _n_distinct_headings([h for h, _ in tagged]) >= 4:
+                continue
+            pairs.sort(reverse=True)
+            _, ba, bb, ha, _hb = pairs[0]
+            bar_idxs = [ba, bb]
+            bar_h = ha
+            stem_idxs = [i for i in ending if i not in bar_idxs]
+        else:
+            continue
+        if bar_h is None or not bar_idxs:
+            continue
+        for stem_i in stem_idxs:
+            sh = _heading_from_hub(parts[stem_i], pt)
+            if sh is None:
+                continue
+            if min(_ang_sep(sh, bar_h), _ang_sep(sh, bar_h + np.pi)) < colinear:
+                continue
+            found.append((pt, stem_i, bar_idxs, sh, bar_h))
+    return found
+
+
+def _far_curb_hit(bar_polys, pt: Point, far_nx: float, far_ny: float) -> Point | None:
+    hits: list[Point] = []
+    for poly in bar_polys:
+        if poly is None or poly.is_empty:
+            continue
+        hit = _ray_hit(poly, pt.x, pt.y, far_nx, far_ny, 0.05, 24.0)
+        if hit is not None:
+            hits.append(hit)
+    if not hits:
+        return None
+    return max(hits, key=lambda q: (q.x - pt.x) * far_nx + (q.y - pt.y) * far_ny)
+
+
+def _clip_beyond_plane(poly, px: float, py: float, nx: float, ny: float):
+    """Drop the half-plane on the +n side of (px, py)."""
+    if poly is None or poly.is_empty:
+        return poly
+    tx, ty = -ny, nx
+    span, depth = 400.0, 80.0
+    cut = Polygon(
+        [
+            (px + tx * span + nx * 0.04, py + ty * span + ny * 0.04),
+            (px - tx * span + nx * 0.04, py - ty * span + ny * 0.04),
+            (px - tx * span + nx * depth, py - ty * span + ny * depth),
+            (px + tx * span + nx * depth, py + ty * span + ny * depth),
+        ]
+    )
+    try:
+        out = make_valid(poly).difference(make_valid(cut))
+    except Exception:
+        return poly
+    parts = _polygon_parts(out)
+    if not parts:
+        return poly
+    return max(parts, key=lambda g: g.area)
+
+
+def _clip_t_stems(parts: list[LineString], rows: list[dict[str, Any]], p: RibbonParams) -> int:
+    """Keep a T stem from poking through the far curb of the bar."""
+    n = 0
+    for pt, stem_i, bar_idxs, stem_h, bar_h in _t_junctions(parts, p):
+        if stem_i < 0 or stem_i >= len(rows):
+            continue
+        stem = _ribbon_poly(rows[stem_i])
+        bars = [_ribbon_poly(rows[i]) for i in bar_idxs if 0 <= i < len(rows)]
+        bars = [b for b in bars if b is not None]
+        if stem is None or not bars:
+            continue
+        bx, by = float(np.cos(bar_h)), float(np.sin(bar_h))
+        nx, ny = -by, bx
+        sx, sy = float(np.cos(stem_h)), float(np.sin(stem_h))
+        if nx * sx + ny * sy > 0:
+            nx, ny = -nx, -ny
+        hit = _far_curb_hit(bars, pt, nx, ny)
+        if hit is None:
+            hit = Point(pt.x + 4.0 * nx, pt.y + 4.0 * ny)
+        clipped = _clip_beyond_plane(stem, hit.x, hit.y, nx, ny)
+        if clipped is None or clipped.is_empty or clipped.area < 0.2 * stem.area:
+            continue
+        if abs(clipped.area - stem.area) < 0.05:
+            continue
+        rows[stem_i]["geometry"] = clipped
+        n += 1
+    if n:
+        print(f"  clipped {n} T-stem ribbons at the bar far curb", flush=True)
+    return n
 
 
 def _geom_points(geom) -> list[Point]:
@@ -2171,6 +2337,7 @@ def ribbons_for_gdf(
                     row["w_clean"] = round(float(after["width_m"]), 2)
                     row["method"] = "clean"
     if src_parts:
+        _clip_t_stems(src_parts, rows, p)
         rows.extend(_junction_astroid_rows(src_parts, rows, rgb, lab, transform, gsd, p))
     if not rows:
         return gpd.GeoDataFrame(columns=RIBBON_COLS, crs=gdf.crs)
